@@ -132,9 +132,21 @@ fun ConnectScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         item {
             GlassCard {
                 CardTitle("Tampilan & Koneksi")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(ThemeMode.SYSTEM to "Sistem", ThemeMode.DARK to "Gelap", ThemeMode.LIGHT to "Terang").forEach { (m, label) ->
-                        FilterChip(selected = settings.theme == m, onClick = { vm.setTheme(m) }, label = { Text(label) })
+                // 7 tema ala HTML Final v4
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        listOf(ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT, ThemeMode.AMOLED),
+                        listOf(ThemeMode.NORD, ThemeMode.SUNSET, ThemeMode.FOREST),
+                    ).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { m ->
+                                FilterChip(
+                                    selected = settings.theme == m,
+                                    onClick = { vm.setTheme(m) },
+                                    label = { Text(m.label) },
+                                )
+                            }
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))

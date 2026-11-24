@@ -20,6 +20,18 @@ import com.tas5805m.ctrl.data.Preset
 import com.tas5805m.ctrl.data.PresetTools
 import kotlinx.coroutines.launch
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
 private fun describe(p: Preset): String = when (p.kind) {
     "eq", "voice", "scene" -> p.note.ifEmpty { if (p.kind == "scene") "EQ + voicing sub" else "" }
     else -> buildString {
@@ -59,10 +71,57 @@ fun PresetScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     val presets by vm.presets.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     var name by remember { mutableStateOf("") }
     var notice by remember { mutableStateOf("") }
     var showImport by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf("") }
+
+    // SAF: baca/tulis file di disk HP tanpa permission storage
+    val importFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        BufferedReader(InputStreamReader(input, Charsets.UTF_8)).readText()
+                    }
+                }.getOrNull()
+            }
+            notice = when {
+                text.isNullOrBlank() -> "Gagal membaca file (kosong atau tidak bisa dibuka)."
+                else -> {
+                    val n = vm.importPresets(text)
+                    if (n > 0) "$n preset diimpor dari file."
+                    else "JSON tidak valid, kosong, atau semua duplikat."
+                }
+            }
+        }
+    }
+    val exportFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val json = vm.exportPresets()
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(json.toByteArray(Charsets.UTF_8))
+                        out.flush()
+                    }
+                    true
+                }.getOrDefault(false)
+            }
+            notice = if (ok) "Preset diekspor ke file." else "Gagal menulis file."
+        }
+    }
+    fun defaultExportName(): String {
+        val ts = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+        return "bgap-presets-$ts.json"
+    }
 
     LazyColumn(
         modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -118,8 +177,15 @@ fun PresetScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                         clipboard.setText(AnnotatedString(vm.exportPresets()))
                         notice = "Preset disalin ke clipboard (JSON)."
                     }
-                }) { Text("Ekspor") }
-                TextButton(onClick = { importText = clipboard.getText()?.text ?: ""; showImport = true }) { Text("Impor") }
+                }) { Text("Salin") }
+                TextButton(onClick = {
+                    exportFileLauncher.launch(defaultExportName())
+                }) { Text("Ekspor file") }
+                TextButton(onClick = {
+                    // MIME: JSON + text + */* agar file manager menampilkan .json di semua folder
+                    importFileLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                }) { Text("Impor file") }
+                TextButton(onClick = { importText = clipboard.getText()?.text ?: ""; showImport = true }) { Text("Tempel") }
             }
         }
         if (presets.isEmpty()) {
@@ -141,7 +207,7 @@ fun PresetScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 OutlinedTextField(
                     value = importText,
                     onValueChange = { importText = it },
-                    label = { Text("Tempel JSON hasil Ekspor") },
+                    label = { Text("Tempel JSON — atau pakai Impor file dari disk") },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 240.dp),
                 )
             },

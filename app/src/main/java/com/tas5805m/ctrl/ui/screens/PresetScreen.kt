@@ -170,22 +170,42 @@ fun PresetScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         }
 
         item(key = "h_user") {
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
-                Text("Preset saya", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                TextButton(onClick = {
-                    scope.launch {
-                        clipboard.setText(AnnotatedString(vm.exportPresets()))
-                        notice = "Preset disalin ke clipboard (JSON)."
-                    }
-                }) { Text("Salin") }
-                TextButton(onClick = {
-                    exportFileLauncher.launch(defaultExportName())
-                }) { Text("Ekspor file") }
-                TextButton(onClick = {
-                    // MIME: JSON + text + */* agar file manager menampilkan .json di semua folder
-                    importFileLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
-                }) { Text("Impor file") }
-                TextButton(onClick = { importText = clipboard.getText()?.text ?: ""; showImport = true }) { Text("Tempel") }
+            // Judul dan aksi dipisah baris agar tidak terhimpit / pecah vertikal di layar sempit
+            Column(Modifier.padding(top = 10.dp)) {
+                Text(
+                    "Preset saya",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Start,
+                ) {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                clipboard.setText(AnnotatedString(vm.exportPresets()))
+                                notice = "Preset disalin ke clipboard (JSON)."
+                            }
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) { Text("Salin", maxLines = 1, softWrap = false) }
+                    TextButton(
+                        onClick = { exportFileLauncher.launch(defaultExportName()) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) { Text("Ekspor", maxLines = 1, softWrap = false) }
+                    TextButton(
+                        onClick = {
+                            importFileLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) { Text("Impor", maxLines = 1, softWrap = false) }
+                    TextButton(
+                        onClick = { importText = clipboard.getText()?.text ?: ""; showImport = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) { Text("Tempel", maxLines = 1, softWrap = false) }
+                }
             }
         }
         if (presets.isEmpty()) {

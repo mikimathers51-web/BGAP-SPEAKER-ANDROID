@@ -132,18 +132,27 @@ fun ConnectScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         item {
             GlassCard {
                 CardTitle("Tampilan & Koneksi")
-                // 7 tema ala HTML Final v4
+                // 7 tema ala HTML Final v4 — 3+4 agar label tidak pecah vertikal di layar sempit
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(
-                        listOf(ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT, ThemeMode.AMOLED),
-                        listOf(ThemeMode.NORD, ThemeMode.SUNSET, ThemeMode.FOREST),
+                        listOf(ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT),
+                        listOf(ThemeMode.AMOLED, ThemeMode.NORD, ThemeMode.SUNSET, ThemeMode.FOREST),
                     ).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
                             row.forEach { m ->
                                 FilterChip(
                                     selected = settings.theme == m,
                                     onClick = { vm.setTheme(m) },
-                                    label = { Text(m.label) },
+                                    label = {
+                                        Text(
+                                            m.label,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                        )
+                                    },
                                 )
                             }
                         }

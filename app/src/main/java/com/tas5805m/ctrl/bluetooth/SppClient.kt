@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
 import com.tas5805m.ctrl.data.AmpState
+import com.tas5805m.ctrl.data.EqSync
 import com.tas5805m.ctrl.data.Diagnosis
 import com.tas5805m.ctrl.data.LineParser
 import com.tas5805m.ctrl.data.Preset
@@ -26,7 +27,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.security.MessageDigest
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.Locale
@@ -61,14 +61,6 @@ class SppClient(private val context: Context) {
 
     /** Antrean tulis tunggal: urutan perintah terjamin dan tidak ada dua penulisan bersamaan ke stream. */
     private val outbox = Channel<String>(Channel.UNLIMITED)
-
-    // ---- OTA ---------------------------------------------------------------
-    /** Balasan firmware yang berkaitan dengan OTA dipisah dari parser status biasa. */
-    private val otaLines = Channel<String>(Channel.UNLIMITED)
-    @Volatile private var otaBusy = false
-    @Volatile private var otaCancelled = false
-    private val _ota = MutableStateFlow(OtaStatus())
-    val ota: StateFlow<OtaStatus> = _ota.asStateFlow()
 
     private val _state = MutableStateFlow(AmpState())
     val state: StateFlow<AmpState> = _state.asStateFlow()
@@ -167,8 +159,7 @@ class SppClient(private val context: Context) {
                     val line = reader.readLine() ?: break
                     val trimmed = line.trim()
                     if (trimmed.isNotEmpty()) {
-                        if (OtaProtocol.isOtaLine(trimmed)) otaLines.trySend(trimmed)
-                        else _state.update { LineParser.apply(it, trimmed) }
+                        _state.update { LineParser.apply(it, trimmed) }
                     }
                 }
             } catch (e: Exception) {
@@ -185,109 +176,13 @@ class SppClient(private val context: Context) {
     private val queued = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun send(cmd: String) {
-        if (socket == null || otaBusy) return   // selama OTA stream mentah: tidak boleh ada perintah/poll nyasar
+        if (socket == null) return
         val c = cmd.trim()
         if (c in POLL_CMDS) {
             if (queued.get() >= MAX_QUEUED_POLL_GUARD) return   // link macet: jangan menumpuk poll
             if (!pendingPolls.add(c)) return                    // poll sama masih menunggu giliran
         }
         if (outbox.trySend(cmd).isSuccess) queued.incrementAndGet() else pendingPolls.remove(c)
-    }
-
-    /** Dipakai alur OTA saja (melewati penjaga otaBusy). */
-    private fun sendOta(cmd: String) {
-        if (socket == null) return
-        if (outbox.trySend(cmd).isSuccess) queued.incrementAndGet()
-    }
-
-    private fun drainOta() { while (otaLines.tryReceive().isSuccess) { /* buang sisa */ } }
-
-    /** Tunggu baris OTA yang memenuhi [accept]; baris lain dilewati. null = waktu habis. */
-    private suspend fun awaitOta(timeoutMs: Long, accept: (String) -> Boolean): String? =
-        withTimeoutOrNull(timeoutMs) {
-            var hit: String? = null
-            while (hit == null) { val l = otaLines.receive(); if (accept(l)) hit = l }
-            hit
-        }
-
-    /** `ota info`: null bila perangkat tidak menjawab (firmware lama tanpa OTA). */
-    suspend fun otaQueryInfo(): OtaInfo? {
-        if (socket == null || _ota.value.busy) return null
-        _ota.value = _ota.value.copy(phase = OtaPhase.QUERY, message = "Memeriksa perangkat…")
-        drainOta()
-        sendOta("ota info")
-        val line = awaitOta(3000) { it.startsWith("OTA INFO") || it.startsWith("ERR") }
-        val info = line?.let { OtaProtocol.parseInfo(it) }
-        _ota.value = OtaStatus(
-            phase = OtaPhase.IDLE, info = info,
-            message = if (info == null) "Perangkat tidak mendukung OTA (firmware lama?)" else "",
-        )
-        return info
-    }
-
-    /** Ganti sandi OTA. null = berhasil, selain itu pesan galat. */
-    suspend fun otaChangePassword(old: String, new: String): String? {
-        if (socket == null) return "Tidak terhubung"
-        if (new.length !in 4..32 || new.any { it.isWhitespace() }) return OtaProtocol.errorText("ERR ota_pw_len")
-        drainOta()
-        sendOta("ota pass $old $new")
-        val r = awaitOta(4000) { it == "OK ota_pass" || it.startsWith("ERR ota_") }
-        return if (r == "OK ota_pass") null else OtaProtocol.errorText(r)
-    }
-
-    fun otaCancel() { otaCancelled = true }
-
-    /**
-     * Kirim [image] (.bin aplikasi ESP32) ke perangkat. Firmware memverifikasi SHA-256 + header image sebelum
-     * mengganti slot boot; bila apa pun gagal, slot lama tetap utuh. Hasil akhir ada di [ota].
-     */
-    suspend fun otaUpdate(image: ByteArray, password: String) = withContext(Dispatchers.IO) {
-        val sock = socket
-        if (sock == null) { _ota.value = OtaStatus(OtaPhase.ERROR, message = "Tidak terhubung"); return@withContext }
-        if (_ota.value.busy) return@withContext
-        val total = image.size.toLong()
-        fun fail(msg: String) { _ota.value = OtaStatus(OtaPhase.ERROR, _ota.value.sent, total, msg, _ota.value.info) }
-        otaCancelled = false
-        val sha = MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it) }
-        otaBusy = true
-        try {
-            _ota.value = OtaStatus(OtaPhase.SENDING, 0, total, "Menghubungi perangkat…", _ota.value.info)
-            drainOta()
-            sendOta("ota begin ${image.size} $sha $password")
-            val ready = awaitOta(10_000) { it == "OTA READY" || it.startsWith("ERR ota_") }
-            if (ready != "OTA READY") { fail(OtaProtocol.errorText(ready)); return@withContext }
-
-            val out = sock.outputStream
-            var sent = 0
-            var acked = 0L
-            _ota.value = _ota.value.copy(message = "Mengirim firmware…")
-            while (sent < image.size) {
-                if (otaCancelled) { fail("Dibatalkan — perangkat membatalkan sendiri dalam ±8 dtk, slot lama utuh"); return@withContext }
-                while (sent - acked >= OtaProtocol.WINDOW) {
-                    val l = awaitOta(8000) { it.startsWith("OTA ACK") || it.startsWith("ERR ota_") }
-                    if (l == null || l.startsWith("ERR")) { fail(OtaProtocol.errorText(l)); return@withContext }
-                    OtaProtocol.parseAck(l)?.let { acked = it }
-                }
-                val n = minOf(OtaProtocol.CHUNK, image.size - sent)
-                out.write(image, sent, n)
-                out.flush()
-                sent += n
-                _ota.value = _ota.value.copy(sent = sent.toLong())
-            }
-            _ota.value = _ota.value.copy(phase = OtaPhase.VERIFY, message = "Memverifikasi dan menulis slot…")
-            val done = awaitOta(30_000) { it == "OK ota_done" || it.startsWith("ERR ota_") }
-            when {
-                done == "OK ota_done" ->
-                    _ota.value = OtaStatus(OtaPhase.DONE, total, total, "Selesai. Perangkat restart — sambungkan ulang dalam beberapa detik.", _ota.value.info)
-                done == null && !_state.value.connected -> fail("Koneksi putus saat verifikasi — kemungkinan perangkat sudah restart; sambungkan ulang dan cek `ota info`")
-                else -> fail(OtaProtocol.errorText(done))
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "ota", e)
-            fail("Gagal kirim: ${e.message ?: "koneksi putus"}")
-        } finally {
-            otaBusy = false
-        }
     }
 
     // ---- Convenience -------------------------------------------------------
@@ -313,6 +208,17 @@ class SppClient(private val context: Context) {
     /** Firmware memakai sscanf("%d"): gain EQ HARUS integer (−15..15). Pecahan akan terpotong diam-diam. */
     fun setEqBand(ch: String, band: Int, gain: Float) =
         send("eqband $ch $band ${gain.roundToInt().coerceIn(-15, 15)}")
+
+    /**
+     * Sync L→R: salin EQ kiri ke kanan (hanya band yang berbeda & tidak terkunci crossover).
+     * Mengembalikan jumlah perintah yang dikirim. Setelah selesai, EQ dibaca ulang dari firmware.
+     */
+    suspend fun syncEqLeftToRight(left: List<Float>, right: List<Float>, lockedBands: Int): Int {
+        val plan = EqSync.plan(left, right, lockedBands)
+        for ((band, gain) in plan) { send("eqband r $band $gain"); delay(40) }
+        if (plan.isNotEmpty()) { delay(120); requestEqDump() }
+        return plan.size
+    }
 
     /** Mode 3: EQ center (`c`) / sub (`s`), band 3..14, gain integer. */
     fun setEqChip2(who: String, band: Int, gain: Float) =

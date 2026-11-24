@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.19.0
+- **EQ — Sync L→R**: tombol baru di toolbar EQ (muncul saat mode *L / R* terpisah, bukan di target CTR/SUB) yang menyalin gain kiri ke kanan lewat `eqband r`. Hanya band yang berbeda yang dikirim; band 0–2 dilewati bila crossover mengunci EQ (firmware menolak `eqband` untuk band tersebut); gain dibulatkan integer −15..15. Setelah selesai EQ dibaca ulang (`eqdump`) dan muncul ringkasan "N band disalin". Tombol *Sync* lama berganti nama **Muat ulang** (fungsinya tetap `eqdump`). Toolbar EQ kini bisa digulir horizontal.
+- **Monitor — pilihan meter tersimpan**: gaya meter (Classic / Segmented / Minimal) dan mode PEAK/AVG disimpan di DataStore (`meter_style`, `meter_rms`) sehingga bertahan setelah app ditutup. Sebelumnya gaya hanya variabel global di memori dan mode selalu kembali ke PEAK.
+- **Monitor — data asli**: tab Monitor tidak lagi memakai sinyal simulasi (sinus). Level dibaca dari firmware lewat `lvl` (chip 1), `lvl2` (chip 2, mode 1/3/5) dan `wlvl` (sub nirkabel, mode 4) ±3×/dtk, hanya saat layar terlihat; di mode 4 `status` ikut di-poll ±1,5 dtk karena `WLVL` hanya mengisi peer yang sudah dikenal dari `WSUBS`. Label kanal mengikuti mode (L/R, SAT/SUB, SAT L/R + Sub, Center/Sub, TW/WF, Sub 1–4). Slave offline atau `WLVL … =na` tampil "n/a". Ada penahan puncak, puncak sesi (**SES**) dan tombol **RESET PEAKS** (`MeterChannel`). Indikator CLIP menyala bila puncak ≥ −1 dB.
+- Toggle **RMS diganti AVG**: firmware hanya mengirim level cuplikan, jadi nilainya rata-rata daya ±24 sampel (bukan RMS gelombang); label disesuaikan agar jujur. Kunci DataStore tetap `meter_rms`.
+- `MonitorViewModel` (generator sinyal palsu, tidak terpakai) dihapus. Pemetaan kanal ada di `MonitorLayout`; uji unit baru: `MonitorLayoutTest`.
+- **Wireless**: grafik mini "BUFFER · LAST 30S" di kartu peer dibuang — itu gelombang sintetis (sinus dari nilai fill), bukan riwayat nyata. Diganti angka asli `fill / target ms` dan `und`/`gap` per slave. Grafik "Riwayat fill" (data nyata, agregat) tidak berubah.
+- **OTA dihapus**: kartu *Update Firmware (OTA)* di Diagnosa, `OtaModels.kt`, `OtaCard.kt`, `OtaProtocolTest` dan seluruh kode OTA di `SppClient` (state `ota`, antrean `otaLines`, penjaga `otaBusy`, `otaUpdate`/`otaQueryInfo`/`otaChangePassword`) dibuang, karena firmware dibuat tanpa OTA. Baris balasan kini langsung ke `LineParser`. Salinan lama `SppClient.kt` dan `OtaModels.kt` di root repo juga dihapus. Entri OTA di versi 3.13.0 di bawah dibiarkan sebagai riwayat.
+- Uji unit baru: `EqSyncTest`.
+
 ## 3.18.0
 - **Loudness sub ikut volume ponsel** (firmware ≥ 2.9.26): sakelar *Ikut volume ponsel* di kartu Loudness sub; menampilkan volume efektif, master, dan volume ponsel. Baris `SUBLOUD` kini memuat `ph= pv= eff=`; perintah `subloud_phone 0|1`.
 - **Mode 6 — 1 chip mono 2-way** (firmware ≥ 2.9.26, env `esp32dev_1chip_2way`): chip *2W 1c* di pilihan Mode (tidak butuh chip 2). 2-way selalu aktif seperti mode 5: OUT_L = tweeter (HPF), OUT_R = woofer (LPF), mono; kartu 2-way hanya slider crossover, Channel Mix *Tweeter (L)* / *Woofer (R)*, Loudness sub tetap tersedia. `AmpState.isMono2Way`, `modeName()` = "2-way 1 Chip".

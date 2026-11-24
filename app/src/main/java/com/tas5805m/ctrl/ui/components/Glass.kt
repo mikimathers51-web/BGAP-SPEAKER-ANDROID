@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -34,7 +35,7 @@ import androidx.compose.ui.unit.sp
  * - Gradient vertikal 0.07 → 0.03
  * - Border 1px rgba(255,255,255,0.10)
  * - Highlight line di atas (seperti ::before di HTML)
- * - Radius 20dp
+ * - Radius 22dp (HTML)
  */
 @Composable
 fun GlassCard(
@@ -42,40 +43,49 @@ fun GlassCard(
     contentPadding: Dp = 16.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val ink = MaterialTheme.colorScheme.onSurface
-    val shape = RoundedCornerShape(20.dp)
+    val scheme = MaterialTheme.colorScheme
+    val ink = scheme.onSurface
+    val primary = scheme.primary
+    val secondary = scheme.secondary
+    // HTML Final v4: border-radius 22px, --card-grad, shadow 0 8px 28px, ::before pri→pri2
+    val shape = RoundedCornerShape(22.dp)
     Box(
         modifier
             .fillMaxWidth()
+            .shadow(
+                elevation = 12.dp,
+                shape = shape,
+                ambientColor = Color.Black.copy(alpha = 0.32f),
+                spotColor = Color.Black.copy(alpha = 0.40f),
+            )
             .clip(shape)
             .background(
                 Brush.verticalGradient(
-                    listOf(ink.copy(alpha = 0.07f), ink.copy(alpha = 0.03f))
+                    listOf(ink.copy(alpha = 0.06f), ink.copy(alpha = 0.025f))
                 ),
                 shape
             )
             .border(1.dp, ink.copy(alpha = 0.10f), shape)
     ) {
-        // Top highlight line (HTML ::before)
+        // Top highlight line (HTML .card::before — gradient pri → pri2)
         Box(
             Modifier
-                .fillMaxWidth()
-                .height(1.dp)
+                .fillMaxWidth(0.76f)
+                .height(1.5.dp)
                 .align(Alignment.TopCenter)
                 .background(
                     Brush.horizontalGradient(
-                        listOf(
-                            Color.Transparent,
-                            ink.copy(alpha = 0.18f),
-                            Color.Transparent
+                        colorStops = arrayOf(
+                            0.0f to Color.Transparent,
+                            0.15f to primary.copy(alpha = 0.55f),
+                            0.50f to secondary.copy(alpha = 0.45f),
+                            0.85f to primary.copy(alpha = 0.55f),
+                            1.0f to Color.Transparent,
                         )
                     )
                 )
         )
-        Column(
-            Modifier.padding(contentPadding),
-            content = content
-        )
+        Column(Modifier.padding(contentPadding), content = content)
     }
 }
 

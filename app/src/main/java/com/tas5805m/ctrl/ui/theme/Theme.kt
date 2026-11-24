@@ -46,38 +46,26 @@ object BgapColors {
     val MeterSubStart = Color(0xFF06B6D4)
 }
 
-// ========================================================
-// ThemeMode — enum pilihan user
-// ========================================================
-
-// ========================================================
-// resolveDark — function (bukan property) supaya bisa
-// dipanggil `resolveDark(settings.theme)` dari MainActivity
-// ========================================================
 @Composable
-fun resolveDark(mode: ThemeMode): Boolean = when (mode) {
-    ThemeMode.SYSTEM -> isSystemInDarkTheme()
-    ThemeMode.DARK   -> true
-    ThemeMode.LIGHT  -> false
-}
+fun resolveDark(mode: ThemeMode): Boolean = mode.isDark(isSystemInDarkTheme())
 
-// Local dark-mode flag untuk diakses di subtree
 private val LocalResolveDark = compositionLocalOf { true }
 
 // ========================================================
-// Color schemes
+// Color schemes — 7 tema ala HTML Final v4
 // ========================================================
-private val AmoledDarkColors = darkColorScheme(
-    primary          = AccentCyan,          // #7DD3FC
-    onPrimary        = Color(0xFF001824),
-    secondary        = AccentAmber,         // #FBBF24
-    tertiary         = AccentAmber,
-    onSecondary      = Color(0xFF1F1300),
-    background       = Color.Black,         // HTML --bg #000
+
+private val DarkColors = darkColorScheme(
+    primary          = Color(0xFF22D3EE),
+    onPrimary        = Color(0xFF001A1F),
+    secondary        = Color(0xFFA78BFA),
+    tertiary         = Color(0xFFFBBF24),
+    onSecondary      = Color(0xFF1A0A2E),
+    background       = Color(0xFF040608),
     onBackground     = TextPrimary,
-    surface          = DarkBackground,      // #05070A
+    surface          = Color(0xFF0A0C10),
     onSurface        = TextPrimary,
-    surfaceVariant   = DarkSurfaceVar,
+    surfaceVariant   = Color(0xFF111827),
     onSurfaceVariant = TextMuted,
     outline          = Color(0xFF334155),
     outlineVariant   = Color(0xFF1E293B),
@@ -85,41 +73,119 @@ private val AmoledDarkColors = darkColorScheme(
     onError          = Color.Black
 )
 
+private val AmoledColors = darkColorScheme(
+    primary          = Color(0xFFC084FC),
+    onPrimary        = Color(0xFF1A0533),
+    secondary        = Color(0xFF818CF8),
+    tertiary         = Color(0xFFFBBF24),
+    onSecondary      = Color(0xFF0F0A2E),
+    background       = Color.Black,
+    onBackground     = Color(0xFFF5F3FF),
+    surface          = Color(0xFF050508),
+    onSurface        = Color(0xFFF5F3FF),
+    surfaceVariant   = Color(0xFF12101A),
+    onSurfaceVariant = Color(0xFFA78BFA),
+    outline          = Color(0xFF4C1D95),
+    outlineVariant   = Color(0xFF2E1065),
+    error            = BadRed,
+    onError          = Color.Black
+)
+
+private val NordColors = darkColorScheme(
+    primary          = Color(0xFF88C0D0),
+    onPrimary        = Color(0xFF0B1A20),
+    secondary        = Color(0xFFB48EAD),
+    tertiary         = Color(0xFFEBCB8B),
+    onSecondary      = Color(0xFF1A0F18),
+    background       = Color(0xFF2E3440),
+    onBackground     = Color(0xFFECEFF4),
+    surface          = Color(0xFF3B4252),
+    onSurface        = Color(0xFFECEFF4),
+    surfaceVariant   = Color(0xFF434C5E),
+    onSurfaceVariant = Color(0xFF81A1C1),
+    outline          = Color(0xFF4C566A),
+    outlineVariant   = Color(0xFF3B4252),
+    error            = Color(0xFFBF616A),
+    onError          = Color.Black
+)
+
+private val SunsetColors = darkColorScheme(
+    primary          = Color(0xFFFB923C),
+    onPrimary        = Color(0xFF2A1000),
+    secondary        = Color(0xFFF472B6),
+    tertiary         = Color(0xFFFBBF24),
+    onSecondary      = Color(0xFF2A0018),
+    background       = Color(0xFF1A0F0A),
+    onBackground     = Color(0xFFFFF7ED),
+    surface          = Color(0xFF221510),
+    onSurface        = Color(0xFFFFF7ED),
+    surfaceVariant   = Color(0xFF2E1C14),
+    onSurfaceVariant = Color(0xFFFDBA74),
+    outline          = Color(0xFF9A3412),
+    outlineVariant   = Color(0xFF7C2D12),
+    error            = Color(0xFFEF4444),
+    onError          = Color.Black
+)
+
+private val ForestColors = darkColorScheme(
+    primary          = Color(0xFF34D399),
+    onPrimary        = Color(0xFF002218),
+    secondary        = Color(0xFF22D3EE),
+    tertiary         = Color(0xFFFBBF24),
+    onSecondary      = Color(0xFF001A1F),
+    background       = Color(0xFF06110D),
+    onBackground     = Color(0xFFECFDF5),
+    surface          = Color(0xFF0A1A14),
+    onSurface        = Color(0xFFECFDF5),
+    surfaceVariant   = Color(0xFF0F241C),
+    onSurfaceVariant = Color(0xFF6EE7B7),
+    outline          = Color(0xFF047857),
+    outlineVariant   = Color(0xFF065F46),
+    error            = BadRed,
+    onError          = Color.Black
+)
+
 private val LightColors = lightColorScheme(
-    primary          = Color(0xFF0369A1),
-    secondary        = Color(0xFFB45309),
-    tertiary         = Color(0xFFB45309),
-    background       = Color(0xFFF8FAFC),
-    onBackground     = Color(0xFF0F172A),
+    primary          = Color(0xFF0891B2),
+    onPrimary        = Color.White,
+    secondary        = Color(0xFF7C3AED),
+    tertiary         = Color(0xFFD97706),
+    onSecondary      = Color.White,
+    background       = Color(0xFFEEF2F7),
+    onBackground     = Color(0xFF0B1220),
     surface          = Color.White,
-    onSurface        = Color(0xFF0F172A),
+    onSurface        = Color(0xFF0B1220),
     surfaceVariant   = Color(0xFFF1F5F9),
     onSurfaceVariant = Color(0xFF475569),
     outline          = Color(0xFFCBD5E1),
     outlineVariant   = Color(0xFFE2E8F0),
-    error            = Color(0xFFDC2626)
+    error            = Color(0xFFDC2626),
+    onError          = Color.White
 )
 
-// ========================================================
-// TasTheme — signature: (ThemeMode, Boolean, content)
-// ========================================================
 @Composable
 fun TasTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val dark = when (themeMode) {
-        ThemeMode.SYSTEM -> isSystemInDarkTheme()
-        ThemeMode.DARK   -> true
-        ThemeMode.LIGHT  -> false
-    }
+    val systemDark = isSystemInDarkTheme()
+    val dark = themeMode.isDark(systemDark)
     val context = LocalContext.current
+
+    val useDynamic = dynamicColor &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        themeMode in setOf(ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT)
+
     val scheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+        useDynamic ->
             if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark  -> AmoledDarkColors
-        else  -> LightColors
+        themeMode == ThemeMode.AMOLED -> AmoledColors
+        themeMode == ThemeMode.NORD -> NordColors
+        themeMode == ThemeMode.SUNSET -> SunsetColors
+        themeMode == ThemeMode.FOREST -> ForestColors
+        themeMode == ThemeMode.LIGHT || (!dark && themeMode == ThemeMode.SYSTEM) -> LightColors
+        else -> DarkColors
     }
     CompositionLocalProvider(LocalResolveDark provides dark) {
         MaterialTheme(colorScheme = scheme, content = content)

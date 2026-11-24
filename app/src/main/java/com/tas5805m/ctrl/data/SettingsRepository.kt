@@ -11,7 +11,31 @@ import kotlinx.coroutines.flow.map
 
 private val Context.settingsStore by preferencesDataStore("settings")
 
-enum class ThemeMode { SYSTEM, DARK, LIGHT }
+/**
+ * 7 tema ala HTML Final v4:
+ * SYSTEM (auto), DARK, LIGHT, AMOLED, NORD, SUNSET, FOREST.
+ */
+enum class ThemeMode {
+    SYSTEM, DARK, LIGHT, AMOLED, NORD, SUNSET, FOREST;
+
+    val label: String
+        get() = when (this) {
+            SYSTEM -> "Sistem"
+            DARK -> "Gelap"
+            LIGHT -> "Terang"
+            AMOLED -> "AMOLED"
+            NORD -> "Nord"
+            SUNSET -> "Sunset"
+            FOREST -> "Forest"
+        }
+
+    /** true = skema gelap (background gelap). */
+    fun isDark(systemDark: Boolean): Boolean = when (this) {
+        SYSTEM -> systemDark
+        LIGHT -> false
+        else -> true
+    }
+}
 
 data class AppSettings(
     val theme: ThemeMode = ThemeMode.SYSTEM,
@@ -19,7 +43,7 @@ data class AppSettings(
     val autoReconnect: Boolean = true,
     val lastAddress: String? = null,
     val lastName: String? = null,
-    /** Gaya level meter Monitor: 0 Classic, 1 Segmented, 2 Minimal. */
+    /** Gaya level meter Monitor: 0 Classic, 1 Segmented, 2 Minimal (sama HTML). */
     val meterStyle: Int = 0,
     /** Mode meter Monitor: false = PEAK, true = RMS. */
     val meterRms: Boolean = false,
@@ -49,6 +73,7 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setTheme(m: ThemeMode) { context.settingsStore.edit { it[kTheme] = m.name } }
     suspend fun setDynamic(on: Boolean) { context.settingsStore.edit { it[kDynamic] = on } }
+    suspend fun setDynamicColor(on: Boolean) = setDynamic(on)
     suspend fun setAutoReconnect(on: Boolean) { context.settingsStore.edit { it[kAuto] = on } }
     suspend fun setMeterStyle(i: Int) { context.settingsStore.edit { it[kMeterStyle] = i.coerceIn(0, 2) } }
     suspend fun setMeterRms(on: Boolean) { context.settingsStore.edit { it[kMeterRms] = on } }

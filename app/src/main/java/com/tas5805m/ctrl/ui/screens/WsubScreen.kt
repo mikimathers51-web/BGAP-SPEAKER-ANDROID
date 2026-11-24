@@ -778,19 +778,27 @@ private fun PeerCardDetailed(
                         .padding(8.dp)
                 ) {
                     Text(
-                        "BUFFER · LAST 30S",
+                        "BUFFER",
                         fontSize = 9.sp,
                         color = Color(0xFF94A3B8),
                         fontFamily = FontFamily.Monospace,
                         letterSpacing = 0.4.sp,
                     )
                     Spacer(Modifier.height(6.dp))
-                    // Mini sparkline dari und/gap sebagai proxy aktivitas buffer
-                    MiniSparkline(
-                        value = fill.toFloat(),
-                        target = targetMs.toFloat().coerceAtLeast(1f),
+                    // Angka asli dari WSUBS (fill/und/gap per slave). Riwayat per-peer tidak dikirim firmware,
+                    // jadi tidak ada grafik di sini; riwayat agregat ada di kartu "Riwayat fill".
+                    Text(
+                        "$fill / ${targetMs.coerceAtLeast(1)} ms",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
                         color = Color(0xFF7DD3FC),
-                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                    )
+                    Text(
+                        "und ${peer.und} · gap ${peer.gap}",
+                        fontSize = 10.sp,
+                        color = Color(0xFF94A3B8),
+                        fontFamily = FontFamily.Monospace,
                     )
                 }
                 // Latency ring
@@ -879,36 +887,6 @@ private fun PeerLatencyRing(fillMs: Int, targetMs: Int, color: Color, modifier: 
                 color = Color(0xFF94A3B8),
             )
         }
-    }
-}
-
-@Composable
-private fun MiniSparkline(value: Float, target: Float, color: Color, modifier: Modifier = Modifier) {
-    // Sparkline sintetis stabil dari nilai fill (tampilan HTML-like tanpa history per-peer)
-    val seed = remember(value) { (value * 17).toInt().coerceAtLeast(1) }
-    Canvas(modifier) {
-        val n = 24
-        val step = size.width / (n - 1)
-        val path = Path()
-        val area = Path()
-        for (i in 0 until n) {
-            val t = i / (n - 1f)
-            val wobble = kotlin.math.sin((i + seed) * 0.55f) * 0.12f +
-                kotlin.math.sin((i + seed) * 1.3f) * 0.06f
-            val base = (value / (target * 1.4f)).coerceIn(0.15f, 0.95f)
-            val y = size.height * (1f - (base + wobble).coerceIn(0.05f, 0.98f))
-            val x = i * step
-            if (i == 0) {
-                path.moveTo(x, y); area.moveTo(x, y)
-            } else {
-                path.lineTo(x, y); area.lineTo(x, y)
-            }
-        }
-        area.lineTo(size.width, size.height)
-        area.lineTo(0f, size.height)
-        area.close()
-        drawPath(area, color.copy(alpha = 0.18f))
-        drawPath(path, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
     }
 }
 

@@ -299,7 +299,6 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
 
         item(key = "faults") { FaultCard(state) }
 
-        item(key = "ota") { OtaCard(spp, state.connected) }
         item(key = "history") { histCard() }
 
         item(key = "chip") { RawCard("Chip & konfigurasi", state, listOf("VER", "INFO", "CLIP", "MOD", "DAC", "DAC2", "EQP", "EQP2")) }

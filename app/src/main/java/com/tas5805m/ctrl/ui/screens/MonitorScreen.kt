@@ -24,17 +24,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tas5805m.ctrl.data.AppViewModel
+import com.tas5805m.ctrl.data.MeterChannel
+import com.tas5805m.ctrl.data.MeterSnapshot
+import com.tas5805m.ctrl.data.MonitorChannel
+import com.tas5805m.ctrl.data.MonitorLayout
 import com.tas5805m.ctrl.ui.components.CardTitle
 import com.tas5805m.ctrl.ui.components.GlassBadge
 import com.tas5805m.ctrl.ui.components.GlassCard
+import com.tas5805m.ctrl.ui.components.PollWhileStarted
 import com.tas5805m.ctrl.ui.theme.*
 import kotlinx.coroutines.delay
-import kotlin.math.sin
+
+/** Jeda antar poll: ±3×/dtk, sesuai asumsi [MeterChannel] (firmware `wlvl` aman ±6×/dtk). */
+private const val TICK_MS = 300L
 
 /**
- * Monitor screen — level meter real-time (PEAK / RMS).
- * Visual diselaraskan dengan prototipe HTML (glass card, badge, meter gradient, readout besar).
+ * Monitor — level meter dari data ASLI firmware: `lvl` (chip 1), `lvl2` (chip 2), `wlvl` (sub nirkabel).
+ * Pemetaan kanal per mode ada di [MonitorLayout]. Poll hanya jalan saat layar terlihat ([PollWhileStarted]).
+ * Mode "AVG" = rata-rata daya atas ±24 sampel terakhir (firmware hanya mengirim level cuplikan, bukan RMS gelombang).
  */
 @Composable
 fun MonitorScreen(
@@ -42,52 +51,59 @@ fun MonitorScreen(
     modifier: Modifier = Modifier
 ) {
     val scroll = rememberScrollState()
-    val meterCtx = androidx.compose.ui.platform.LocalContext.current
-    val meterPrefs = remember { meterCtx.getSharedPreferences("bgap_ui", android.content.Context.MODE_PRIVATE) }
-    LaunchedEffect(Unit) { meterStyle = meterPrefs.getInt("meter_style", 0).coerceIn(0, 2) }
+    val state by vm.state.collectAsStateWithLifecycle()
 
-    var masterL by remember { mutableStateOf(-60f) }
-    var masterR by remember { mutableStateOf(-60f) }
-    var masterLPeak by remember { mutableStateOf(-60f) }
-    var masterRPeak by remember { mutableStateOf(-60f) }
-    var subLvl by remember { mutableStateOf(-60f) }
-    var satLLvl by remember { mutableStateOf(-60f) }
-    var satRLvl by remember { mutableStateOf(-60f) }
-    var subPeak by remember { mutableStateOf(-60f) }
-    var satLPeak by remember { mutableStateOf(-60f) }
-    var satRPeak by remember { mutableStateOf(-60f) }
+    // Pilihan meter disimpan di DataStore (bertahan setelah app ditutup). Kunci `meterRms` = mode AVG.
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val isAvg = settings.meterRms
+    val meterStyle = settings.meterStyle
 
-    var isRms by remember { mutableStateOf(false) }
+    val meters = remember { mutableMapOf<String, MeterChannel>() }
+    var snaps by remember { mutableStateOf<Map<String, MeterSnapshot>>(emptyMap()) }
 
-    LaunchedEffect(Unit) {
-        val start = System.currentTimeMillis()
+    // Ganti mode = pemetaan kanal berubah → buang riwayat lama.
+    LaunchedEffect(state.mode) { meters.clear(); snaps = emptyMap() }
+
+    PollWhileStarted {
+        var n = 0
         while (true) {
-            val t = (System.currentTimeMillis() - start) / 1000f
-            val subT  = signal(t, -18f, 0f, 1.7f) + sin(t * 0.4f) * 3f
-            val satLT = signal(t, -22f, 1.1f, 2.1f)
-            val satRT = signal(t, -22f, 2.3f, 1.9f)
-            val mLT = maxOf(subT, satLT) + 1.5f
-            val mRT = maxOf(subT, satRT) + 1.5f
-
-            val att = if (isRms) 0.15f else 0.40f
-            val rel = if (isRms) 0.08f else 0.15f
-            val off = if (isRms) -3f else 0f
-
-            masterL = lerpMeter(masterL, mLT + off, att, rel)
-            masterR = lerpMeter(masterR, mRT + off, att, rel)
-            subLvl  = lerpMeter(subLvl,  subT + off, 0.30f, 0.12f)
-            satLLvl = lerpMeter(satLLvl, satLT + off, att, rel)
-            satRLvl = lerpMeter(satRLvl, satRT + off, att, rel)
-
-            masterLPeak = updatePeak(masterLPeak, masterL)
-            masterRPeak = updatePeak(masterRPeak, masterR)
-            subPeak     = updatePeak(subPeak, subLvl)
-            satLPeak    = updatePeak(satLPeak, satLLvl)
-            satRPeak    = updatePeak(satRPeak, satRLvl)
-
-            delay(33)
+            val st = vm.state.value
+            if (!st.connected) { delay(TICK_MS); continue }
+            if (st.hasLvl) vm.spp.requestLvl()
+            if (st.hasLvl2 && MonitorLayout.needsLvl2(st.mode)) vm.spp.requestLvl2()
+            if (st.isWireless && st.hasWlvl) {
+                // WLVL hanya mengisi peer yang sudah dikenal dari `status` (baris WSUBS) → status tiap ±1,5 dtk.
+                if (n % 5 == 0) vm.spp.requestStatus()
+                if (st.peerDetails.isNotEmpty()) vm.spp.requestWlvl()
+            }
+            delay(TICK_MS)   // beri waktu balasan tiba sebelum sampel diambil
+            val cur = vm.state.value
+            val now = System.currentTimeMillis()
+            val (a, b) = MonitorLayout.main(cur.mode)
+            for (ch in listOf(a, b) + MonitorLayout.extra(cur)) {
+                val v = MonitorLayout.read(cur, ch.id)
+                if (v == null) meters.remove(ch.id)          // n/a (slave offline / WLVL na)
+                else meters.getOrPut(ch.id) { MeterChannel() }.push(v, now)
+            }
+            snaps = meters.mapValues { it.value.snapshot() }
+            n++
         }
     }
+
+    if (!state.connected) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Hubungkan perangkat dulu", color = Color.Gray)
+        }
+        return
+    }
+
+    val (chA, chB) = MonitorLayout.main(state.mode)
+    val extra = MonitorLayout.extra(state)
+    val sA = snaps[chA.id]; val sB = snaps[chB.id]
+    val lA = sA.levelDb(isAvg); val lB = sB.levelDb(isAvg)
+    val pA = sA.peakDb(); val pB = sB.peakDb()
+    val sesMax = maxOf(sA?.sessionMax ?: MeterChannel.FLOOR, sB?.sessionMax ?: MeterChannel.FLOOR) / 10f
+    val clip = maxOf(pA, pB) >= -1f
 
     Column(
         modifier = modifier
@@ -96,13 +112,13 @@ fun MonitorScreen(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Mode toggle PEAK / RMS (seperti HTML)
+        // Mode toggle PEAK / AVG
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf(false to "PEAK", true to "RMS").forEach { (rms, label) ->
-                val active = isRms == rms
+            listOf(false to "PEAK", true to "AVG").forEach { (avg, label) ->
+                val active = isAvg == avg
                 Text(
                     label,
                     color = if (active) AccentCyan else TextMuted,
@@ -119,13 +135,20 @@ fun MonitorScreen(
                             if (active) AccentCyan.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.08f),
                             RoundedCornerShape(10.dp)
                         )
-                        .clickable { isRms = rms }
+                        .clickable { vm.setMeterRms(avg) }
                         .padding(vertical = 8.dp)
                 )
             }
         }
 
-        // ── Master Output ──────────────────────────────────
+        if (!state.hasLvl) {
+            Text(
+                "Firmware ini tidak melaporkan level meter (CAPS tanpa `lvl`).",
+                color = WarnAmber, fontSize = 12.sp
+            )
+        }
+
+        // ── Output (chip 1) ────────────────────────────────
         GlassCard {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -133,11 +156,10 @@ fun MonitorScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "MASTER OUTPUT",
+                    "OUTPUT · ${state.modeName().uppercase()}",
                     color = TextMuted, fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp
                 )
-                val clip = masterL > -1f || masterR > -1f
                 Text(
                     "CLIP",
                     color = if (clip) BadRed else TextDim,
@@ -159,7 +181,7 @@ fun MonitorScreen(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (meterStyle == i) OkGreen else Color.White.copy(alpha = 0.06f))
-                            .clickable { meterStyle = i; meterPrefs.edit().putInt("meter_style", i).apply() }
+                            .clickable { vm.setMeterStyle(i) }
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                 }
@@ -170,10 +192,10 @@ fun MonitorScreen(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // L / R vertical meters
                 MeterPair(
-                    leftLevel = masterL, rightLevel = masterR,
-                    leftPeak = masterLPeak, rightPeak = masterRPeak
+                    a = chA, b = chB,
+                    levelA = lA, levelB = lB, peakA = pA, peakB = pB,
+                    style = meterStyle
                 )
                 // dB scale
                 Column(
@@ -184,100 +206,107 @@ fun MonitorScreen(
                         Text(it, color = TextDim, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
                     }
                 }
-                // Big readout (mirip screenshot: angka besar di kanan)
+                // Readout besar: kanal yang lebih keras
                 Column(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.End
                 ) {
-                    val peak = maxOf(masterLPeak, masterRPeak)
+                    val loud = if (lA >= lB) chA else chB
+                    val loudDb = maxOf(lA, lB)
                     Text(
-                        "R",
+                        loud.label,
                         color = TextMuted,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(end = 4.dp)
                     )
                     Text(
-                        fmtDb(masterR),
-                        color = dbColor(masterR),
+                        fmtDb(loudDb),
+                        color = dbColor(loudDb),
                         fontSize = 36.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
                         letterSpacing = (-1).sp
                     )
-                    Text(
-                        "dB",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Text("dB", color = TextMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                     Spacer(Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "PK  ",
-                            color = TextMuted,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            fmtDb(peak),
-                            color = dbColor(peak),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            " dB",
-                            color = TextMuted,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
+                    ReadoutRow("PK ", maxOf(pA, pB))
+                    ReadoutRow("SES", sesMax)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "RESET PEAKS",
+                        color = AccentCyan, fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                meters.values.forEach { it.resetPeaks() }
+                                snaps = meters.mapValues { it.value.snapshot() }
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
         }
 
-        // ── Channels ───────────────────────────────────────
-        GlassCard {
-            CardTitle(
-                text = "Channels",
-                trailing = { GlassBadge("from TAS5805M") }
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().height(160.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                ChannelColumn("Sub",   subLvl,  subPeak,  Modifier.weight(1f), isSub = true)
-                ChannelColumn("Sat L", satLLvl, satLPeak, Modifier.weight(1f))
-                ChannelColumn("Sat R", satRLvl, satRPeak, Modifier.weight(1f))
+        // ── Channels (chip 2 / sub nirkabel) ───────────────
+        if (extra.isNotEmpty() || state.isWireless) {
+            GlassCard {
+                CardTitle(
+                    text = "Channels",
+                    trailing = { GlassBadge(if (state.isWireless) "wireless sub" else "chip 2") }
+                )
+                if (extra.isEmpty()) {
+                    Text("Menunggu data sub nirkabel…", color = TextMuted, fontSize = 12.sp)
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(160.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        extra.forEach { ch ->
+                            val sn = snaps[ch.id]
+                            ChannelColumn(
+                                ch.label, sn.levelDb(isAvg), sn.peakDb(),
+                                Modifier.weight(1f), meterStyle,
+                                isSub = ch.isSub, na = sn == null
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-/** Gaya level meter (0 Classic, 1 Segmented, 2 Minimal) — meniru pilihan di versi HTML. */
-private var meterStyle by mutableIntStateOf(0)
+@Composable
+private fun MeterPair(
+    a: MonitorChannel, b: MonitorChannel,
+    levelA: Float, levelB: Float, peakA: Float, peakB: Float, style: Int
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(Triple(a, levelA, peakA), Triple(b, levelB, peakB)).forEach { (ch, lv, pk) ->
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                VerticalMeter(lv, pk, Modifier.width(28.dp).height(150.dp), style, isSub = ch.isSub)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    ch.label, color = TextMuted, fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
 
 @Composable
-private fun MeterPair(leftLevel: Float, rightLevel: Float, leftPeak: Float, rightPeak: Float) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            VerticalMeter(leftLevel, leftPeak, Modifier.width(28.dp).height(150.dp))
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "L", color = TextMuted, fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold
-            )
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            VerticalMeter(rightLevel, rightPeak, Modifier.width(28.dp).height(150.dp))
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "R", color = TextMuted, fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold
-            )
-        }
+private fun ReadoutRow(label: String, db: Float) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("$label ", color = TextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        Text(
+            fmtDb(db), color = dbColor(db), fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace
+        )
+        Text(" dB", color = TextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
     }
 }
 
@@ -286,6 +315,7 @@ private fun VerticalMeter(
     level: Float,
     peak: Float,
     modifier: Modifier,
+    meterStyle: Int,
     isSub: Boolean = false
 ) {
     val animated by animateFloatAsState(
@@ -360,7 +390,9 @@ private fun ChannelColumn(
     level: Float,
     peak: Float,
     modifier: Modifier,
-    isSub: Boolean = false
+    meterStyle: Int,
+    isSub: Boolean = false,
+    na: Boolean = false
 ) {
     Column(
         modifier = modifier
@@ -370,12 +402,12 @@ private fun ChannelColumn(
             .padding(horizontal = 8.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        VerticalMeter(level, peak, Modifier.fillMaxWidth().weight(1f), isSub = isSub)
+        VerticalMeter(level, peak, Modifier.fillMaxWidth().weight(1f), meterStyle, isSub = isSub)
         Spacer(Modifier.height(8.dp))
         Text(name, color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         Text(
-            fmtDb(level),
-            color = if (isSub) AccentAmber else dbColor(level),
+            if (na) "n/a" else fmtDb(level),
+            color = if (na) TextDim else if (isSub) AccentAmber else dbColor(level),
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.SemiBold
@@ -386,20 +418,11 @@ private fun ChannelColumn(
 // ========================================================
 // Helpers
 // ========================================================
-private fun signal(t: Float, base: Float, offset: Float, speed: Float): Float =
-    base +
-    sin(t * speed + offset) * 6f +
-    sin(t * speed * 2.31f + offset * 1.7f) * 3.5f +
-    sin(t * speed * 5.13f + offset * 2.9f) * 1.8f +
-    sin(t * speed * 9.7f + offset * 4.1f) * 0.9f
+/** deci-dB → dB untuk tampilan (null = belum ada data → lantai). */
+private fun MeterSnapshot?.levelDb(avg: Boolean): Float =
+    (if (this == null) MeterChannel.FLOOR else if (avg) this.avg else this.now) / 10f
 
-private fun lerpMeter(current: Float, target: Float, attack: Float, release: Float): Float {
-    val t = target.coerceIn(-60f, 0f)
-    return (current + (t - current) * (if (t > current) attack else release)).coerceIn(-60f, 0f)
-}
-
-private fun updatePeak(peak: Float, level: Float): Float =
-    if (level > peak) level else (peak - 0.35f).coerceAtLeast(-60f).coerceAtLeast(level)
+private fun MeterSnapshot?.peakDb(): Float = (this?.peakHold ?: MeterChannel.FLOOR) / 10f
 
 private fun fmtDb(db: Float): String = when {
     db <= -59.5f -> "−∞"

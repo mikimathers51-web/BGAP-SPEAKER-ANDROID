@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tas5805m.ctrl.data.AmpState
 import com.tas5805m.ctrl.data.AppViewModel
+import com.tas5805m.ctrl.data.EqSync
+import kotlinx.coroutines.launch
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
@@ -46,6 +48,9 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     val tgt = if (hasTargets) target else "SAT"
     val chip2 = tgt != "SAT"
     val linkEff = link || chip2
+    val scope = rememberCoroutineScope()
+    var syncing by remember { mutableStateOf(false) }
+    var syncMsg by remember { mutableStateOf<String?>(null) }
     val src: List<Float> = when (tgt) {
         "CTR" -> state.eqCtr
         "SUB" -> state.eqSub
@@ -62,7 +67,7 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize()) {
         // Toolbar
         Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -89,16 +94,33 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                     )
                 }
             }
-            Spacer(Modifier.weight(1f))
-            if (!chip2 && !link) {
-                // Salin EQ kiri → kanan (band 0–2 dilewati bila dikunci crossover), seperti "Sync L→R" di versi HTML
-                TextButton(onClick = {
-                    state.eqLeft.forEachIndexed { i, v ->
-                        if (!(state.xoverLocksEq && i <= 2)) spp.setEqBand("r", i, v)
+            // Sync L→R: hanya relevan saat kanal L dan R dipisah (bukan L+R, bukan target CTR/SUB)
+            if (!linkEff) {
+                TextButton(
+                    enabled = !syncing,
+                    onClick = {
+                        syncing = true
+                        scope.launch {
+                            val n = spp.syncEqLeftToRight(
+                                state.eqLeft, state.eqRight,
+                                if (state.xoverLocksEq) EqSync.LOCKED_BANDS else 0
+                            )
+                            syncMsg = if (n == 0) "R sudah sama dengan L" else "L→R: $n band disalin"
+                            syncing = false
+                            kotlinx.coroutines.delay(3000); syncMsg = null
+                        }
                     }
-                }) { Text("L→R") }
+                ) { Text("Sync L→R") }
             }
-            TextButton(onClick = { spp.requestEqDump() }) { Text("Sync") }
+            TextButton(onClick = { spp.requestEqDump() }) { Text("Muat ulang") }
+        }
+        syncMsg?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
         }
 
         if (state.xoverLocksEq) {
@@ -135,12 +157,6 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         }
 
         // Quick shapes
-        Text(
-            "BENTUK CEPAT",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.5f),
-            modifier = Modifier.padding(horizontal = 16.dp)
-        )
         Row(
             Modifier
                 .horizontalScroll(rememberScrollState())

@@ -3,6 +3,7 @@ package com.tas5805m.ctrl.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +19,10 @@ data class AppSettings(
     val autoReconnect: Boolean = true,
     val lastAddress: String? = null,
     val lastName: String? = null,
+    /** Gaya level meter Monitor: 0 Classic, 1 Segmented, 2 Minimal. */
+    val meterStyle: Int = 0,
+    /** Mode meter Monitor: false = PEAK, true = RMS. */
+    val meterRms: Boolean = false,
 )
 
 /** Preferensi tampilan + perangkat terakhir (untuk sambung otomatis). Disimpan di DataStore. */
@@ -27,6 +32,8 @@ class SettingsRepository(private val context: Context) {
     private val kAuto = booleanPreferencesKey("auto_reconnect")
     private val kAddr = stringPreferencesKey("last_address")
     private val kName = stringPreferencesKey("last_name")
+    private val kMeterStyle = intPreferencesKey("meter_style")
+    private val kMeterRms = booleanPreferencesKey("meter_rms")
 
     val settings: Flow<AppSettings> = context.settingsStore.data.map { p ->
         AppSettings(
@@ -35,12 +42,16 @@ class SettingsRepository(private val context: Context) {
             autoReconnect = p[kAuto] ?: true,
             lastAddress = p[kAddr],
             lastName = p[kName],
+            meterStyle = (p[kMeterStyle] ?: 0).coerceIn(0, 2),
+            meterRms = p[kMeterRms] ?: false,
         )
     }
 
     suspend fun setTheme(m: ThemeMode) { context.settingsStore.edit { it[kTheme] = m.name } }
     suspend fun setDynamic(on: Boolean) { context.settingsStore.edit { it[kDynamic] = on } }
     suspend fun setAutoReconnect(on: Boolean) { context.settingsStore.edit { it[kAuto] = on } }
+    suspend fun setMeterStyle(i: Int) { context.settingsStore.edit { it[kMeterStyle] = i.coerceIn(0, 2) } }
+    suspend fun setMeterRms(on: Boolean) { context.settingsStore.edit { it[kMeterRms] = on } }
     suspend fun setLastDevice(address: String, name: String) {
         context.settingsStore.edit { it[kAddr] = address; it[kName] = name }
     }

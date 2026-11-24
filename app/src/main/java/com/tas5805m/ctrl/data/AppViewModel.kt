@@ -104,6 +104,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!on) { reconnectJob?.cancel(); _reconnecting.value = 0 }
     }
 
+    fun setMeterStyle(i: Int) { viewModelScope.launch { settingsRepo.setMeterStyle(i) } }
+    fun setMeterRms(on: Boolean) { viewModelScope.launch { settingsRepo.setMeterRms(on) } }
+
     fun refreshBonded() = spp.refreshBonded()
 
     fun connect(device: android.bluetooth.BluetoothDevice) {

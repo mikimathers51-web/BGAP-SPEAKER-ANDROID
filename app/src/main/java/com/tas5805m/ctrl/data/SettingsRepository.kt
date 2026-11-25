@@ -66,7 +66,7 @@ class SettingsRepository(private val context: Context) {
             autoReconnect = p[kAuto] ?: true,
             lastAddress = p[kAddr],
             lastName = p[kName],
-            meterStyle = (p[kMeterStyle] ?: 0).coerceIn(0, 2),
+            meterStyle = (p[kMeterStyle] ?: 0).coerceIn(0, 3),
             meterRms = p[kMeterRms] ?: false,
         )
     }
@@ -75,7 +75,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun setDynamic(on: Boolean) { context.settingsStore.edit { it[kDynamic] = on } }
     suspend fun setDynamicColor(on: Boolean) = setDynamic(on)
     suspend fun setAutoReconnect(on: Boolean) { context.settingsStore.edit { it[kAuto] = on } }
-    suspend fun setMeterStyle(i: Int) { context.settingsStore.edit { it[kMeterStyle] = i.coerceIn(0, 2) } }
+    suspend fun setMeterStyle(i: Int) { context.settingsStore.edit { it[kMeterStyle] = i.coerceIn(0, 3) } }
     suspend fun setMeterRms(on: Boolean) { context.settingsStore.edit { it[kMeterRms] = on } }
     suspend fun setLastDevice(address: String, name: String) {
         context.settingsStore.edit { it[kAddr] = address; it[kName] = name }

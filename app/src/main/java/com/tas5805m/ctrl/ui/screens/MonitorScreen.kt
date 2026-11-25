@@ -13,9 +13,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -35,6 +37,7 @@ import com.tas5805m.ctrl.ui.components.PollWhileStarted
 import com.tas5805m.ctrl.ui.components.VerticalLevelMeter
 import com.tas5805m.ctrl.ui.theme.*
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 /** Jeda antar poll: ±3×/dtk, sesuai asumsi [MeterChannel] (firmware `wlvl` aman ±6×/dtk). */
 private const val TICK_MS = 300L
@@ -102,6 +105,14 @@ fun MonitorScreen(
             Text("Hubungkan perangkat dulu", color = Color.Gray)
         }
         return
+    }
+
+    // Satu sumber aksi reset — dipakai di mode Analog maupun mode batang.
+    val resetPeaks: () -> Unit = {
+        meters.values.forEach { it.resetPeaks() }
+        subPeak.resetPeaks()
+        snaps = meters.mapValues { it.value.snapshot() }
+        subSnap = subPeak.snapshot()
     }
 
     val (chA, chB) = MonitorLayout.main(state.mode)
@@ -228,12 +239,7 @@ fun MonitorScreen(
                         fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .clickable {
-                                meters.values.forEach { it.resetPeaks() }
-                                subPeak.resetPeaks()
-                                snaps = meters.mapValues { it.value.snapshot() }
-                                subSnap = subPeak.snapshot()
-                            }
+                            .clickable { resetPeaks() }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
@@ -248,15 +254,8 @@ fun MonitorScreen(
                         levelA = lA, levelB = lB, peakA = pA, peakB = pB,
                         style = meterStyle
                     )
-                    // dB scale
-                    Column(
-                        modifier = Modifier.height(150.dp).padding(bottom = 18.dp),
-                        verticalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        listOf("0", "−12", "−24", "−36", "−48", "−60").forEach {
-                            Text(it, color = TextDim, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
-                        }
-                    }
+                    // dB scale — tinggi blok & posisi label dibuat identik dengan MeterPair
+                    DbScale()
                     // Readout besar: kanal yang lebih keras
                     Column(
                         modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -291,12 +290,7 @@ fun MonitorScreen(
                             fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable {
-                                    meters.values.forEach { it.resetPeaks() }
-                                    subPeak.resetPeaks()
-                                    snaps = meters.mapValues { it.value.snapshot() }
-                                    subSnap = subPeak.snapshot()
-                                }
+                                .clickable { resetPeaks() }
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
@@ -344,19 +338,19 @@ fun MonitorScreen(
                             }
                         }
                     } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().height(160.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        extra.forEach { ch ->
-                            val sn = snaps[ch.id]
-                            ChannelColumn(
-                                ch.label, sn.levelDb(isAvg), sn.peakDb(),
-                                Modifier.weight(1f), meterStyle,
-                                isSub = ch.isSub, na = sn == null
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().height(160.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            extra.forEach { ch ->
+                                val sn = snaps[ch.id]
+                                ChannelColumn(
+                                    ch.label, sn.levelDb(isAvg), sn.peakDb(),
+                                    Modifier.weight(1f), meterStyle,
+                                    isSub = ch.isSub, na = sn == null
+                                )
+                            }
                         }
-                    }
                     }
                 }
             }
@@ -369,6 +363,83 @@ fun MonitorScreen(
         }
     }
 }
+
+// ========================================================
+// Skala dB
+// ========================================================
+
+/** Tinggi batang meter (dipakai bersama oleh [MeterPair], [DbScale]). */
+private val METER_BAR_HEIGHT = 150.dp
+
+/** Jarak batang → label kanal (dipakai bersama oleh [MeterPair], [DbScale]). */
+private val METER_LABEL_GAP = 6.dp
+
+/**
+ * Skala dB yang menempel persis pada batang meter.
+ *
+ * [VerticalLevelMeter] memetakan 0 dB → tepi atas dan −60 dB → tepi bawah secara linear.
+ * Supaya label "0"/"−60" duduk tepat di garis itu, tiap label diposisikan lewat
+ * [Modifier.layout] dan digeser setengah tinggi teksnya (pusat label = garis skala).
+ *
+ * Tinggi isi = [METER_BAR_HEIGHT], dan di bawahnya diberi [METER_LABEL_GAP] + placeholder
+ * ber-style sama dengan label kanal ([ChannelLabelPlaceholder]) — sehingga saat Row
+ * di-align Bottom, batang skala & batang meter rata sempurna.
+ */
+@Composable
+private fun DbScale(modifier: Modifier = Modifier) {
+    // fraksi 0 = tepi atas batang (0 dB), 1 = tepi bawah (−60 dB)
+    val ticks = listOf(
+        "0"   to 0f,
+        "−12" to 0.2f,
+        "−24" to 0.4f,
+        "−36" to 0.6f,
+        "−48" to 0.8f,
+        "−60" to 1f,
+    )
+    Column(modifier) {
+        Box(Modifier.height(METER_BAR_HEIGHT)) {
+            ticks.forEach { (label, frac) ->
+                Text(
+                    label,
+                    color = TextDim,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    modifier = Modifier.layout { measurable, constraints ->
+                        val h = constraints.maxHeight            // = METER_BAR_HEIGHT (px)
+                        val p = measurable.measure(Constraints()) // ukur teks apa adanya
+                        layout(p.width, h) {
+                            // pusat label jatuh tepat di frac * h, bukan tepinya
+                            p.place(0, (frac * h - p.height / 2f).roundToInt())
+                        }
+                    }
+                )
+            }
+        }
+        Spacer(Modifier.height(METER_LABEL_GAP))
+        ChannelLabelPlaceholder()
+    }
+}
+
+/**
+ * Placeholder transparan yang meniru tinggi/lebar label kanal di [MeterPair].
+ * Dipakai [DbScale] agar total tingginya sama dengan blok meter — kalau style label
+ * kanal berubah, ubah di sini dan di [MeterPair] agar tetap sinkron.
+ */
+@Composable
+private fun ChannelLabelPlaceholder() {
+    Text(
+        "\u00A0",
+        color = Color.Transparent,
+        fontSize = 9.sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
+// ========================================================
+// Komponen kartu & meter
+// ========================================================
 
 @Composable
 private fun SubPeakCard(snap: SubPeakSnapshot?) {
@@ -425,8 +496,8 @@ private fun MeterPair(
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(Triple(a, levelA, peakA), Triple(b, levelB, peakB)).forEach { (ch, lv, pk) ->
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                VerticalMeter(lv, pk, Modifier.width(28.dp).height(150.dp), style, isSub = ch.isSub)
-                Spacer(Modifier.height(6.dp))
+                VerticalMeter(lv, pk, Modifier.width(28.dp).height(METER_BAR_HEIGHT), style, isSub = ch.isSub)
+                Spacer(Modifier.height(METER_LABEL_GAP))
                 Text(
                     ch.label, color = TextMuted, fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold

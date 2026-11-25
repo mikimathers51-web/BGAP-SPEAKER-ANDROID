@@ -192,6 +192,17 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 val gR = state.eqRight.getOrElse(i) { 0f }
                 var localL by remember(gL, tgt) { mutableFloatStateOf(gL) }
                 var localR by remember(gR) { mutableFloatStateOf(gR) }
+                // Kirim langsung saat digeser: maks. tiap 120 ms & hanya bila nilai bulat (dB) berubah; nilai akhir saat dilepas.
+                val sentL = remember { longArrayOf(0L, Long.MIN_VALUE) }   // [waktu, nilai terakhir]
+                val sentR = remember { longArrayOf(0L, Long.MIN_VALUE) }
+                val sendL: (Float) -> Unit = { v ->
+                    when {
+                        tgt == "CTR" -> spp.setEqChip2("c", i, v)
+                        tgt == "SUB" -> spp.setEqChip2("s", i, v)
+                        link -> spp.setEqBand("b", i, v)
+                        else -> spp.setEqBand("l", i, v)
+                    }
+                }
 
                 Card(
                     colors = if (locked)
@@ -227,14 +238,16 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                                 onValueChange = {
                                     localL = it
                                     if (linkEff) localR = it
+                                    val iv = it.roundToInt().toLong()
+                                    val now = System.currentTimeMillis()
+                                    if (iv != sentL[1] && now - sentL[0] >= 120L) {
+                                        sentL[0] = now; sentL[1] = iv
+                                        sendL(it)
+                                    }
                                 },
                                 onValueChangeFinished = {
-                                    when {
-                                        tgt == "CTR" -> spp.setEqChip2("c", i, localL)
-                                        tgt == "SUB" -> spp.setEqChip2("s", i, localL)
-                                        link -> spp.setEqBand("b", i, localL)
-                                        else -> spp.setEqBand("l", i, localL)
-                                    }
+                                    if (localL.roundToInt().toLong() != sentL[1]) sendL(localL)
+                                    sentL[1] = Long.MIN_VALUE
                                 },
                                 // firmware: gain EQ integer (sscanf %d) -> langkah 1 dB, bukan 0,5 dB
                                 valueRange = -15f..15f,
@@ -244,8 +257,19 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                             if (!linkEff) {
                                 Slider(
                                     value = localR,
-                                    onValueChange = { localR = it },
-                                    onValueChangeFinished = { spp.setEqBand("r", i, localR) },
+                                    onValueChange = {
+                                        localR = it
+                                        val iv = it.roundToInt().toLong()
+                                        val now = System.currentTimeMillis()
+                                        if (iv != sentR[1] && now - sentR[0] >= 120L) {
+                                            sentR[0] = now; sentR[1] = iv
+                                            spp.setEqBand("r", i, it)
+                                        }
+                                    },
+                                    onValueChangeFinished = {
+                                        if (localR.roundToInt().toLong() != sentR[1]) spp.setEqBand("r", i, localR)
+                                        sentR[1] = Long.MIN_VALUE
+                                    },
                                     valueRange = -15f..15f,
                                     steps = 29,
                                     modifier = Modifier.height(28.dp),

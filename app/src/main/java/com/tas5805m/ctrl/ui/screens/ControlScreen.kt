@@ -91,7 +91,7 @@ private fun PbassCard(state: AmpState, spp: SppClient) {
                 onSend = { v -> spp.setPbassCfg(((v / 5f).roundToInt() * 5).coerceIn(0, 100), fc) },
                 valueRange = 0f..100f,
                 steps = 19,
-                live = false,
+                throttleMs = 300L,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("FC (HARMONIK MULAI DI)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -102,7 +102,7 @@ private fun PbassCard(state: AmpState, spp: SppClient) {
                 onSend = { v -> spp.setPbassCfg(amt, ((v / 10f).roundToInt() * 10).coerceIn(40, 150)) },
                 valueRange = 40f..150f,
                 steps = 10,
-                live = false,
+                throttleMs = 300L,
             )
             Text(
                 "Setel FC mendekati frekuensi terendah yang masih dimainkan speaker (mis. 60–100 Hz). Harmonik ditambahkan ke sinyal: " +
@@ -155,7 +155,7 @@ private fun SubLoudCard(state: AmpState, spp: SppClient) {
                 onSend = { v -> spp.setSubloudCfg(((v * 2f).roundToInt() * 5).coerceIn(0, 60), lo, hi) },   // langkah 0,5 dB
                 valueRange = 0f..6f,
                 steps = 11,
-                live = false,
+                throttleMs = 300L,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("MULAI DI MASTER ≤", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -166,7 +166,7 @@ private fun SubLoudCard(state: AmpState, spp: SppClient) {
                 onSend = { v -> spp.setSubloudCfg(db10, lo, ((v / 5f).roundToInt() * 5).coerceIn(lo + 5, 100)) },
                 valueRange = 20f..100f,
                 steps = 15,
-                live = false,
+                throttleMs = 300L,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("BOOST PENUH DI MASTER ≤", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -177,7 +177,7 @@ private fun SubLoudCard(state: AmpState, spp: SppClient) {
                 onSend = { v -> spp.setSubloudCfg(db10, ((v / 5f).roundToInt() * 5).coerceIn(0, hi - 5), hi) },
                 valueRange = 0f..95f,
                 steps = 18,
-                live = false,
+                throttleMs = 300L,
             )
             Text(
                 "Boost = gain digital lebih besar: bass sangat keras bisa clipping. Uji dengan sweep bass di volume pelan.",
@@ -225,7 +225,7 @@ private fun TwayCard(state: AmpState, spp: SppClient) {
                 value = state.twayHz.toFloat(),
                 onSend = { v -> spp.setTwayHz(((v / 50f).roundToInt() * 50).coerceIn(state.twayMin, state.twayMax)) },
                 valueRange = state.twayMin.toFloat()..state.twayMax.toFloat(),
-                live = false,
+                throttleMs = 300L,
                 snap = { v -> (v / 50f).roundToInt() * 50f },
             )
             Text(
@@ -263,7 +263,7 @@ private fun CrossoverCard(state: AmpState, spp: SppClient) {
                 onSend = { spp.setXover(snap(it)) },
                 valueRange = 60f..xmax.toFloat(),
                 steps = xsteps,
-                live = false,
+                throttleMs = 300L,
             )
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -275,7 +275,7 @@ private fun CrossoverCard(state: AmpState, spp: SppClient) {
                 onSend = { v -> if (linked) spp.setXover(snap(v)) else spp.setXoverHp(snap(v)) },
                 valueRange = 60f..xmax.toFloat(),
                 steps = xsteps,
-                live = false,
+                throttleMs = 300L,
             )
             if (!linked) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -287,7 +287,7 @@ private fun CrossoverCard(state: AmpState, spp: SppClient) {
                     onSend = { v -> spp.setXoverLp(snap(v)) },
                     valueRange = 60f..xmax.toFloat(),
                     steps = xsteps,
-                    live = false,
+                    throttleMs = 300L,
                 )
                 val hp = state.xover
                 val lp = state.xoverLp
@@ -479,7 +479,7 @@ fun ControlScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                     onSend = { spp.setStandby((it / 5) * 5) },
                     valueRange = 0..120,
                     steps = 23,
-                    live = false,
+                    throttleMs = 300L,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

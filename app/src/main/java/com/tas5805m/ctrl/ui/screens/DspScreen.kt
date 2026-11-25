@@ -157,7 +157,8 @@ private fun MixerCard(s: AmpState, spp: SppClient) {
                     spp.setMixer("lr", -ww); spp.setMixer("rl", -ww)
                 },
                 valueRange = 0..50,
-                live = false,
+                // live: tiap kirim = 4 perintah mixer (+ status penuh tiap perintah) → throttle lebih longgar
+                throttleMs = 400L,
                 enabled = !locked,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -182,7 +183,7 @@ private fun MixerCard(s: AmpState, spp: SppClient) {
                     value = v,
                     onSend = { spp.setMixer(ch, it) },
                     valueRange = -1f..2f,
-                    live = false,
+                    throttleMs = 200L,   // live: suara berubah saat digeser; 1 perintah per kirim, sama ringannya dengan slider master
                     enabled = !locked,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -224,7 +225,7 @@ private fun EqProfileCard(s: AmpState, spp: SppClient) {
                 onSend = { f -> spp.setEqProfile("b", index(if (type == 0) 1 else type, f.coerceIn(60, 150) / 10 * 10)) },
                 valueRange = 60..150,
                 steps = 8,
-                live = false,
+                throttleMs = 300L,
                 enabled = type != 0,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -241,13 +242,13 @@ private fun ClipCard(s: AmpState, spp: SppClient) {
     val mr = s.tagInt("CLIP", "mr") ?: 0
     DspCard("Clipper chip", "Pembatas puncak di chip. Satuan 0,1 dB. Salah setel membuat suara terdistorsi.") {
         Labeled("Gain clipper", "${g / 10f} dB") {
-            SendSliderInt(g, { spp.setClip(it, ml, mr) }, -300..0, live = false, modifier = Modifier.fillMaxWidth())
+            SendSliderInt(g, { spp.setClip(it, ml, mr) }, -300..0, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
         }
         Labeled("Batas kiri (ml)", "$ml") {
-            SendSliderInt(ml, { spp.setClip(g, it, mr) }, 0..300, live = false, modifier = Modifier.fillMaxWidth())
+            SendSliderInt(ml, { spp.setClip(g, it, mr) }, 0..300, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
         }
         Labeled("Batas kanan (mr)", "$mr") {
-            SendSliderInt(mr, { spp.setClip(g, ml, it) }, 0..300, live = false, modifier = Modifier.fillMaxWidth())
+            SendSliderInt(mr, { spp.setClip(g, ml, it) }, 0..300, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -306,11 +307,11 @@ private fun DacCard(s: AmpState, spp: SppClient) {
 private fun PowerCard(s: AmpState, spp: SppClient) {
     DspCard("Gain analog & daya") {
         Labeled("Gain analog (0 = 0 dB, 31 = −15,5 dB)", "${String.format(Locale.US, "%.1f", -0.5f * s.gain)} dB") {
-            SendSliderInt(s.gain, { spp.setGain(it) }, 0..31, steps = 30, live = false, modifier = Modifier.fillMaxWidth())
+            SendSliderInt(s.gain, { spp.setGain(it) }, 0..31, steps = 30, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
         }
         if (s.hasStandby) {
             Labeled("Auto-standby", if (s.standbyMin == 0) "nonaktif" else "${s.standbyMin} menit") {
-                SendSliderInt(s.standbyMin, { spp.setStandby(it) }, 0..240, live = false, modifier = Modifier.fillMaxWidth())
+                SendSliderInt(s.standbyMin, { spp.setStandby(it) }, 0..240, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
             }
         }
         if (s.hasSubInv && s.hasSubPath) {

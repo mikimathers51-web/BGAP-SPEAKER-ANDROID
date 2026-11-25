@@ -423,7 +423,7 @@ private fun ExtraCard(extra: Int?, latBase: Int?, latCmd: Int?, onExtra: (Int) -
                 onSend = { onExtra((it / 5) * 5) },
                 valueRange = 0..200,
                 steps = 39,
-                live = false,
+                throttleMs = 300L,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -443,7 +443,7 @@ private fun TrimCard(current: Int, onTrim: (Int) -> Unit) {
                 value = current,
                 onSend = onTrim,
                 valueRange = -60..100,
-                live = false,
+                throttleMs = 300L,
                 modifier = Modifier.fillMaxWidth()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -514,7 +514,7 @@ private fun VoiceCard(v: VoiceParams, warn: String?, free: Boolean, onChange: (V
                     )
                 },
                 valueRange = 30..150,
-                live = false,
+                throttleMs = 300L,
                 modifier = Modifier.fillMaxWidth()
             )
 

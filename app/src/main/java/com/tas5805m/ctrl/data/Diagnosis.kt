@@ -27,6 +27,11 @@ object Diagnosis {
     /** Slave ≥ 2.9.20: peaking bebas (Hz/Q/0,1 dB) via biquad; < 2.9.20: band 80/125 Hz, gain bulat, Q tetap. */
     const val SLAVE_FREE_PEAK_PATCH = 20
     private const val DEFAULT_PKT = 64
+    /** Jeda ≥ ini (ms) antar callback audio / antar kirim dianggap stall (histogram firmware: 40/60/80/100/200/500). */
+    private const val STALL_TAP_MS = 100L
+    private const val TX_WAIT_WARN_MS = 40L
+    /** Antrean TX master berkapasitas 14 item (wireless_sub_master.cpp). */
+    private const val TXQ_NEAR_FULL = 12L
 
     val FAULT_INFO: Map<String, Triple<Level, String, String>> = mapOf(
         "oc_r" to Triple(Level.ERR, "Overcurrent kanal kanan (OC-R)",
@@ -66,7 +71,7 @@ object Diagnosis {
         put("w.nomem", w?.get("nomem")); put("w.ackfail", w?.get("ackfail"))
         put("w.ackok", w?.get("ackok")); put("w.txf", w?.get("txf"))
         val b = s.tags["BTD"]
-        put("b.g100", b?.get("g100")); put("b.g200", b?.get("g200")); put("b.g500", b?.get("g500"))
+        put("b.g80", b?.get("g80")); put("b.g100", b?.get("g100")); put("b.g200", b?.get("g200")); put("b.g500", b?.get("g500"))
         for (p in s.peerDetails) {
             val k = p.mac.uppercase()
             m["s.$k.und"] = p.und.toLong()
@@ -185,13 +190,23 @@ object Diagnosis {
 
         // ---- sisi TX master
         val nomem = d("w.nomem")
+        val okTx = d("w.ackok")
+        val failTx = d("w.ackfail")
+        val failPct = if (okTx + failTx >= 20) (failTx * 100 / (okTx + failTx)).toInt() else 0
+        val txDrop = w?.get("drop")?.toLongOrNull() ?: 0L
         if (w?.get("err") == "NO_MEM" || nomem > 0) {
-            out += Finding(Level.ERR, "Antrean TX ESP-NOW penuh (NO_MEM ×$nomem)",
-                "Radio tersita A2DP; paket audio sub terbuang.",
-                "Pastikan -D WSUB_FAST_RATE=1 (default), coba -D WSUB_COEX_PREF=2, jauhkan dari router 2.4 GHz. WSUB_PKT_TX sudah di batas 64.")
+            // NO_MEM sekali yang sudah pulih (tanpa paket terbuang & ACK sehat) hanya peringatan;
+            // ERR bila sedang terjadi / berulang / sudah ada dampak nyata.
+            val severe = w?.get("err") == "NO_MEM" || nomem >= 3 || txDrop > 0 || failPct >= 2
+            out += Finding(if (severe) Level.ERR else Level.WARN,
+                "Antrean TX ESP-NOW penuh (NO_MEM ×$nomem)",
+                if (severe) "Antrean/pengiriman ESP-NOW tersendat; paket audio sub bisa terbuang (radio sibuk atau RAM tipis)."
+                else "Terjadi sesaat dan sudah pulih; belum ada paket terbuang (drop=$txDrop, ACK gagal $failPct%).",
+                "Pastikan -D WSUB_FAST_RATE=1 (default), coba -D WSUB_COEX_PREF=2, jauhkan dari router 2.4 GHz. WSUB_PKT_TX sudah di batas 64. " +
+                    "Sering berkaitan dengan RAM internal yang tipis (lihat temuan RAM).")
         }
-        val ok = d("w.ackok")
-        val fail = d("w.ackfail")
+        val ok = okTx
+        val fail = failTx
         val tot = ok + fail
         if (tot >= 20 && fail > 0) {
             val pct = (fail * 100 / tot).toInt()
@@ -209,12 +224,42 @@ object Diagnosis {
             out += Finding(Level.WARN, "esp_now_send gagal ×$txf", "Pengiriman ditolak stack radio.", "Lihat err= di baris WSUB.")
         }
         w?.get("ch")?.let { out += Finding(Level.INFO, "Channel radio master: $it", "Slave harus memakai channel yang sama (WSUB_CHANNEL).") }
+        // Diagnostik per jendela (firmware me-reset tiap `status`, ±2 dtk): hanya mewakili jendela terakhir, bukan kumulatif.
+        val tapGap = w?.get("tapgap")?.toLongOrNull() ?: 0L
+        val tapBig = w?.get("tapbig")?.toLongOrNull() ?: 0L
+        val sndGap = w?.get("sndgap")?.toLongOrNull() ?: 0L
+        val waitMs = w?.get("wait")?.toLongOrNull() ?: 0L
+        val qMax = w?.get("qmax")?.toLongOrNull() ?: 0L
+        if (tapGap >= STALL_TAP_MS) {
+            out += Finding(Level.WARN, "Stall di jalur A2DP master (jeda $tapGap ms, ×$tapBig > 40 ms)",
+                "Callback audio Bluetooth berhenti sejenak. Penyebab umum: ponsel menahan paket, atau radio 2.4 GHz direbut Wi-Fi/ESP-NOW.",
+                "Coba -D WSUB_COEX_PREF=2, dekatkan HP, jauhkan router 2.4 GHz.")
+        } else if (sndGap >= STALL_TAP_MS || waitMs >= TX_WAIT_WARN_MS || qMax >= TXQ_NEAR_FULL) {
+            out += Finding(Level.WARN, "Pengiriman ESP-NOW tertahan (jeda kirim $sndGap ms, tunggu $waitMs ms, antrean $qMax/14)",
+                "Audio masuk normal tetapi keluar ke slave terlambat: radio sibuk atau ACK lambat.",
+                "Coba -D WSUB_COEX_PREF=2, ganti channel (1/11), dekatkan slave.")
+        }
+
         val heapMin = w?.get("heapmin")?.toLongOrNull()
+        val psram = s.tags["VER"]?.get("psram")?.toLongOrNull() ?: -1L
         if (heapMin != null) {
-            if (heapMin < 10_000) out += Finding(Level.ERR, "RAM internal master hampir habis (min ${heapMin / 1024} KB)",
-                "Risiko crash 'Out of memory'.", "Kurangi fitur/log; pastikan master memakai ESP32-WROVER (PSRAM).")
-            else if (heapMin < 20_000) out += Finding(Level.WARN, "RAM internal master mepet (min ${heapMin / 1024} KB)",
-                "A2DP + SPP + ESP-NOW memakan heap internal.", "Pantau; hindari menambah fitur.")
+            val fix = if (psram > 0)
+                "PSRAM sudah ada (${psram / 1024} KB); sisa RAM internal dipakai Bluetooth + Wi-Fi. Kurangi log/fitur dan periksa apakah master reboot sendiri."
+            else if (psram == 0L)
+                "Master tidak punya PSRAM: pakai ESP32-WROVER, atau kurangi fitur/log."
+            else
+                "Kurangi fitur/log; pindahkan buffer besar ke PSRAM bila modul punya."
+            // Master wireless ber-PSRAM memang berjalan dengan heap internal ±4–8 KB (Bluedroid + Wi-Fi di library
+            // prebuilt), jadi ambangnya lebih longgar agar kartu tidak selalu merah pada build normal.
+            val tight = psram > 0
+            val errBelow = if (tight) 2_000L else 10_000L
+            val warnBelow = if (tight) 6_000L else 20_000L
+            if (heapMin < errBelow) out += Finding(Level.ERR, "RAM internal master hampir habis (min ${heapMin / 1024} KB)",
+                "Risiko crash 'Out of memory'.", fix)
+            else if (heapMin < warnBelow) out += Finding(Level.WARN, "RAM internal master mepet (min ${heapMin / 1024} KB)",
+                "A2DP + SPP + ESP-NOW memakan heap internal." +
+                    if (tight) " Normal untuk build ini selama tidak reboot sendiri." else "",
+                "Pantau; hindari menambah fitur.")
         }
         val c = s.tags["WSUBC"]
         val mc = maxOf(c?.get("cpu0")?.toIntOrNull() ?: -1, c?.get("cpu1")?.toIntOrNull() ?: -1)
@@ -247,9 +292,15 @@ object Diagnosis {
             val expected = rate / 16.0 / pkt
             val dUnd = d("s.$key.und")
             val dGap = d("s.$key.gap")
-            val jitter = if (dUnd > 0 || dGap > 0) " (und +$dUnd, gap +$dGap sejak ukur)" else ""
+            val since = if (s.baselineAtMs > 0) "sejak ukur" else "sejak boot slave"
+            val jitter = if (dUnd > 0 || dGap > 0) " (und +$dUnd, gap +$dGap $since)" else ""
+            // tapavg = rata-rata frame per callback A2DP pada jendela terakhir; 0 = tidak ada audio mengalir (jeda/stop).
+            val streaming = w?.get("tapavg")?.toLongOrNull()?.let { it > 0 } ?: true
             if (p.rxa >= 0) {
-                if (p.rxa <= 2 && d("w.ackok") > 0) {
+                if (!streaming && p.rxa < expected * 0.7) {
+                    out += Finding(Level.INFO, "$n: tidak ada audio mengalir saat diukur (rxa=${p.rxa}/s)",
+                        "Musik sedang jeda/berhenti, jadi laju penerimaan audio tidak dinilai.", "Ukur ulang saat musik diputar.")
+                } else if (p.rxa <= 2 && d("w.ackok") > 0) {
                     out += Finding(Level.ERR, "$n tidak menerima audio (rxa=${p.rxa}/s)",
                         "Master mengirim & di-ACK, tetapi slave menolak paket (rej=${p.rej}).",
                         "Unpair slave (BOOT 3 dtk) lalu pair ulang; pastikan MAC master cocok.")
@@ -257,11 +308,25 @@ object Diagnosis {
                     out += Finding(Level.WARN, "$n penerimaan audio rendah (rxa=${p.rxa}/s, normal ≈ ${expected.roundToInt()}/s)$jitter",
                         "Paket hilang di udara.", "Dekatkan slave, ganti channel sepi (1/6/11), kurangi gangguan.")
                 } else if (dUnd > 0 || dGap > 0) {
+                    val est = dg?.get("est")?.toDoubleOrNull()
+                    val need = dg?.get("need")?.toDoubleOrNull()
+                    val margin = if (est != null && need != null) " Margin est−need ≈ ${"%.1f".format(Locale.US, est - need)} ms." else ""
+                    val bt = s.tags["BTD"]
+                    val btGaps = bt?.get("g80")?.toLongOrNull() ?: 0L   // histogram kumulatif: g80 sudah mencakup g100/g200/g500
+                    val btNote = if (btGaps > 0) " Jeda paket A2DP ≥80 ms terdeteksi ×$btGaps (ponsel/coex radio)." else ""
                     out += Finding(Level.WARN, "$n link baik tapi buffer kurang$jitter",
-                        "Jitter buffer slave tidak cukup.", "Naikkan trim (tab Wireless) atau WSUB_SLAVE_DMA_COUNT 3→4.")
+                        "Jitter buffer slave tidak cukup.$margin$btNote",
+                        "Naikkan trim (tab Wireless) ± +30 ms, bila masih underrun naikkan WSUB_SLAVE_DMA_COUNT 3→4.")
                 }
             } else if (dUnd > 0 || dGap > 0) {
                 out += Finding(Level.WARN, "$n underrun/gap$jitter", "Slave lama tanpa statistik rxa.", "Naikkan trim.")
+            }
+            val adapt = dg?.get("adapt")?.toIntOrNull()
+            val jmax = dg?.get("jmax")?.toIntOrNull()
+            if (adapt != null && jmax != null && jmax > 0 && adapt * 10 >= jmax * 9) {
+                out += Finding(Level.WARN, "$n buffer adaptif sudah di batas atas (adapt=$adapt dari jmax=$jmax)",
+                    "Margin jitter otomatis tidak bisa naik lagi; gap A2DP lebih panjang akan jadi underrun.",
+                    "Naikkan WSUB_JIT_MAX di firmware slave (mis. 480), atau trim di tab Wireless.")
             }
             val dRej = d("s.$key.rej")
             if (dRej > 0) out += Finding(Level.WARN, "$n menolak paket ×$dRej", "MAC pengirim bukan master yang dipasangkan.", "Unpair lalu pair ulang.")
@@ -281,13 +346,18 @@ object Diagnosis {
         // ---- Bluetooth (A2DP)
         val b = s.tags["BTD"]
         if (b != null) {
-            val g100 = d("b.g100"); val g200 = d("b.g200"); val g500 = d("b.g500")
+            val g80 = d("b.g80"); val g100 = d("b.g100"); val g200 = d("b.g200"); val g500 = d("b.g500")
             if (g200 + g500 > 0) {
                 out += Finding(Level.WARN, "Stall A2DP: ≥200 ms ×$g200, ≥500 ms ×$g500",
                     "Audio Bluetooth sempat putus-putus (≥100 ms ×$g100).",
                     "Coba -D WSUB_COEX_PREF=2 (prioritas radio ke Bluetooth), jauhkan HP/router, kurangi beban ESP-NOW.")
             } else if (g100 > 0) {
                 out += Finding(Level.INFO, "Gap A2DP ≥100 ms ×$g100", "Ringan; pantau.")
+            } else if (g80 - g100 > 0) {
+                // histogram firmware kumulatif (g80 = gap > 80 ms, termasuk yang > 100)
+                out += Finding(Level.INFO, "Gap A2DP 80–100 ms ×${g80 - g100}",
+                    "Belum stall, tetapi sudah mendekati batas buffer sub (latensi 70–120 ms).",
+                    "Bila ada underrun sub, naikkan trim.")
             }
             val rssi = b["rssi"]?.toIntOrNull()
             val age = b["rssi_age"]?.toIntOrNull() ?: -1
@@ -335,7 +405,14 @@ object Diagnosis {
         sb.append("Perangkat : ").append(s.deviceName).append(' ').append(s.deviceAddress).append('\n')
         sb.append("Mode      : ").append(s.modeName()).append(" (").append(s.mode).append(")\n")
         sb.append("Firmware  : ").append(s.fwVersion.ifEmpty { "-" }).append(' ').append(s.fwRole).append('\n')
-        sb.append("CAPS      : ").append(s.caps.joinToString(" ")).append("\n\n")
+        sb.append("CAPS      : ").append(s.caps.joinToString(" ")).append('\n')
+        sb.append("Jendela   : ").append(
+            if (s.baselineAtMs > 0) "counter dihitung sejak ukur, ${((System.currentTimeMillis() - s.baselineAtMs) / 1000).coerceAtLeast(0)} dtk lalu"
+            else "counter kumulatif sejak boot (belum 'Reset ukur')"
+        ).append('\n')
+        sb.append("Ringkasan : ").append(
+            Level.values().joinToString(" · ") { lv -> "${findings.count { it.level == lv }} ${lv.name}" }
+        ).append("\n\n")
         sb.append("== HASIL ==\n")
         for (f in findings) {
             sb.append('[').append(f.level.name).append("] ").append(f.title)
@@ -349,7 +426,8 @@ object Diagnosis {
             sb.append(s.rawByHead[k]).append('\n')
         }
         if (s.btEvents.isNotEmpty()) {
-            sb.append("\n== EVENT BT ==\n")
+            sb.append("\n== EVENT BT (jam = waktu kejadian) ==\n")
+            sb.append(btSummary(s)).append('\n')
             s.btEvents.forEach { sb.append(it).append('\n') }
         }
         if (s.faultHistory.isNotEmpty()) {
@@ -360,9 +438,36 @@ object Diagnosis {
                     .append(e.flags.joinToString(",") { faultLabel(it) }).append('\n')
             }
         }
-        sb.append("\n== LOG (terbaru di bawah) ==\n")
-        s.lastLines.take(80).reversed().forEach { sb.append(it).append('\n') }
+        sb.append("\n== LOG (terbaru di bawah; balasan OK status/info dll disembunyikan, baris identik berurutan diringkas) ==\n")
+        compactLog(s.lastLines.reversed()).takeLast(60).forEach { sb.append(it).append('\n') }
         return sb.toString()
+    }
+
+    /** Ringkasan satu baris dari ring event BT: jumlah per jenis + gap terpanjang. */
+    fun btSummary(s: AmpState): String {
+        val ev = s.btEvents
+        fun cnt(k: String) = ev.count { it.contains("ev=$k") }
+        val gaps = ev.filter { it.contains("ev=gap") }.mapNotNull { Regex("""ms=(\d+)""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+        val drop = s.tags["BTD"]?.get("evdrop")?.toLongOrNull() ?: 0L
+        return "Ringkasan: underrun ×${cnt("underrun")}, gap>80ms ×${cnt("gap")}" +
+            (if (gaps.isNotEmpty()) " (maks ${gaps.max()} ms)" else "") +
+            ", ganti state audio ×${cnt("audio")}, koneksi ×${cnt("conn")}" +
+            (if (drop > 0) ", event terbuang firmware ×$drop (ring penuh)" else "")
+    }
+
+    /** Buang balasan sinkron `OK <perintah>` dan ringkas baris identik yang berurutan menjadi `... ×N`. Input: lama → baru. */
+    fun compactLog(lines: List<String>): List<String> {
+        val out = ArrayList<String>()
+        var last: String? = null
+        var n = 0
+        fun flush() { if (last != null) out += if (n > 1) "$last   ×$n" else last!! }
+        for (l in lines) {
+            if (l.startsWith("OK ") && l.removePrefix("OK").trim() in LineParser.SYNC_OK) continue
+            if (l == last) { n++; continue }
+            flush(); last = l; n = 1
+        }
+        flush()
+        return out
     }
 
     /** Dipakai UI: apakah ada nilai absolut mencurigakan di mixer (untuk label). */

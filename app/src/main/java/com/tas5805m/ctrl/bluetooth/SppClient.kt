@@ -220,6 +220,33 @@ class SppClient(private val context: Context) {
         return plan.size
     }
 
+    /**
+     * Terapkan satu bentuk EQ (chip Flat/Bass+/… di tab EQ) ke [who] = "SAT" | "CTR" | "SUB".
+     * Band 0..[lockedBands]-1 dilewati (terkunci crossover). Firmware hanya membalas `OK eqband` per band,
+     * jadi slider digeser langsung (optimistis) lalu dikonfirmasi dengan `eqdump` — nilai asli chip menimpa bila ada beda.
+     */
+    suspend fun applyEqShape(who: String, gains: List<Float>, lockedBands: Int) {
+        val g = List(15) { gains.getOrElse(it) { 0f }.roundToInt().coerceIn(-15, 15).toFloat() }
+        for (i in lockedBands until 15) {
+            when (who) {
+                "CTR" -> setEqChip2("c", i, g[i])
+                "SUB" -> setEqChip2("s", i, g[i])
+                else -> setEqBand("b", i, g[i])
+            }
+            delay(28)   // sama dengan jalur preset: beri waktu tulis I2C per band
+        }
+        _state.update { st ->
+            fun merge(old: List<Float>) = List(15) { if (it < lockedBands) old.getOrElse(it) { 0f } else g[it] }
+            when (who) {
+                "CTR" -> st.copy(eqCtr = merge(st.eqCtr))
+                "SUB" -> st.copy(eqSub = merge(st.eqSub))
+                else -> st.copy(eqLeft = merge(st.eqLeft), eqRight = merge(st.eqRight))
+            }
+        }
+        delay(120)
+        requestEqDump()   // konfirmasi: slider mengikuti nilai sebenarnya di chip (juga EQC/EQS di mode 3)
+    }
+
     /** Mode 3: EQ center (`c`) / sub (`s`), band 3..14, gain integer. */
     fun setEqChip2(who: String, band: Int, gain: Float) =
         send("eqc $who $band ${gain.roundToInt().coerceIn(-15, 15)}")

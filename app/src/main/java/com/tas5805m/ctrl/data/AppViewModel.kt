@@ -151,6 +151,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { presetRepo.add(p) }
     }
 
+    /** Simpan EQ 15 band saat ini sebagai preset jenis "eq" (tanpa mode/xover/volume). */
+    fun saveEqPreset(name: String, left: List<Float>, right: List<Float>) {
+        val p = Preset(
+            name = name.ifBlank { "EQ ${System.currentTimeMillis() % 10000}" },
+            kind = "eq",
+            eqOn = true, eqLeft = left, eqRight = right,
+            created = java.time.Instant.now().toString(),
+        )
+        viewModelScope.launch { presetRepo.add(p) }
+    }
+
     /** Simpan EQ + voicing sub saat ini sebagai preset "scene" (tanpa mode/xover/volume). */
     fun saveScene(name: String) {
         val s = state.value

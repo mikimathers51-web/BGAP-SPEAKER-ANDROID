@@ -173,15 +173,8 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             shapes.forEach { (name, g) ->
                 AssistChip(
                     onClick = {
-                        g.forEachIndexed { i, v ->
-                            if (!(state.xoverLocksEq && i <= 2)) {
-                                when (tgt) {
-                                    "CTR" -> spp.setEqChip2("c", i, v)
-                                    "SUB" -> spp.setEqChip2("s", i, v)
-                                    else -> spp.setEqBand("b", i, v)
-                                }
-                            }
-                        }
+                        // Kirim + geser slider langsung + konfirmasi eqdump (lihat SppClient.applyEqShape)
+                        scope.launch { spp.applyEqShape(tgt, g, if (state.xoverLocksEq) 3 else 0) }
                     },
                     label = { Text(name, fontSize = 12.sp) }
                 )

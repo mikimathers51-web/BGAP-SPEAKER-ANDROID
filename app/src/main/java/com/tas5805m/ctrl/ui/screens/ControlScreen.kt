@@ -50,6 +50,7 @@ import com.tas5805m.ctrl.ui.components.CardTitle
 import com.tas5805m.ctrl.ui.components.GlassBadge
 import com.tas5805m.ctrl.ui.components.GlassCard
 import com.tas5805m.ctrl.ui.components.GlassGap
+import com.tas5805m.ctrl.ui.components.HorizontalLevelMeter
 import com.tas5805m.ctrl.ui.components.PollWhileStarted
 import com.tas5805m.ctrl.ui.components.SendSlider
 import com.tas5805m.ctrl.ui.components.SendSliderInt
@@ -543,20 +544,17 @@ private fun ChannelRow(
 
 @Composable
 fun LevelBar(label: String, deciDb: Int) {
-    val norm = ((deciDb + 1200) / 1200f).coerceIn(0f, 1f)
     val db = deciDb / 10f
-    val color = when {
-        norm > 0.9f -> BadRed
-        norm > 0.7f -> WarnAmber
-        else -> OkGreen
-    }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
         Text(label, modifier = Modifier.width(28.dp), style = MaterialTheme.typography.labelSmall)
-        LinearProgressIndicator(
-            progress = { norm },
-            modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)),
-            color = color,
-            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+        // Skala −60..0 dB, sama dengan Monitor (sinyal < −60 dB nyaris tak terdengar); poll Home ±500 ms → release 450 ms.
+        HorizontalLevelMeter(
+            levelDb = db,
+            peakDb = null,
+            modifier = Modifier.weight(1f),
+            minDb = -60f,
+            barHeight = 8.dp,
+            releaseMs = 450,
         )
         Text("${db.roundToInt()}", modifier = Modifier.width(36.dp), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
     }

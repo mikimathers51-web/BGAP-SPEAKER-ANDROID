@@ -1,8 +1,5 @@
 package com.tas5805m.ctrl.ui.screens
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,9 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -30,10 +24,15 @@ import com.tas5805m.ctrl.data.MeterChannel
 import com.tas5805m.ctrl.data.MeterSnapshot
 import com.tas5805m.ctrl.data.MonitorChannel
 import com.tas5805m.ctrl.data.MonitorLayout
+import com.tas5805m.ctrl.data.SubPeakSnapshot
+import com.tas5805m.ctrl.data.SubPeakTracker
+import com.tas5805m.ctrl.ui.components.AnalogVuMeter
 import com.tas5805m.ctrl.ui.components.CardTitle
 import com.tas5805m.ctrl.ui.components.GlassBadge
 import com.tas5805m.ctrl.ui.components.GlassCard
+import com.tas5805m.ctrl.ui.components.HorizontalLevelMeter
 import com.tas5805m.ctrl.ui.components.PollWhileStarted
+import com.tas5805m.ctrl.ui.components.VerticalLevelMeter
 import com.tas5805m.ctrl.ui.theme.*
 import kotlinx.coroutines.delay
 
@@ -62,7 +61,11 @@ fun MonitorScreen(
     var snaps by remember { mutableStateOf<Map<String, MeterSnapshot>>(emptyMap()) }
 
     // Ganti mode = pemetaan kanal berubah → buang riwayat lama.
-    LaunchedEffect(state.mode) { meters.clear(); snaps = emptyMap() }
+    // Pengukur puncak khusus subwoofer (kanal sub terkeras dari semua kanal sub di mode ini).
+    val subPeak = remember { SubPeakTracker() }
+    var subSnap by remember { mutableStateOf<SubPeakSnapshot?>(null) }
+
+    LaunchedEffect(state.mode) { meters.clear(); snaps = emptyMap(); subPeak.clear(); subSnap = null }
 
     PollWhileStarted {
         var n = 0
@@ -86,6 +89,10 @@ fun MonitorScreen(
                 else meters.getOrPut(ch.id) { MeterChannel() }.push(v, now)
             }
             snaps = meters.mapValues { it.value.snapshot() }
+            val subLevels = (listOf(a, b) + MonitorLayout.extra(cur)).filter { it.isSub }
+                .mapNotNull { MonitorLayout.read(cur, it.id) }
+            if (subLevels.isNotEmpty()) subPeak.push(subLevels.max(), now)
+            subSnap = subPeak.snapshot()
             n++
         }
     }
@@ -173,79 +180,126 @@ fun MonitorScreen(
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("Classic", "Segmented", "Minimal").forEachIndexed { i, n ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf("Classic", "Segmented", "Minimal", "Analog").forEachIndexed { i, n ->
                     Text(
-                        n, fontSize = 12.sp,
+                        n, fontSize = 11.sp, textAlign = TextAlign.Center, maxLines = 1,
                         color = if (meterStyle == i) Color.Black else TextMuted,
                         modifier = Modifier
+                            .weight(1f)
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (meterStyle == i) OkGreen else Color.White.copy(alpha = 0.06f))
                             .clickable { vm.setMeterStyle(i) }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .padding(horizontal = 4.dp, vertical = 6.dp)
                     )
                 }
             }
             Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth().height(180.dp),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                MeterPair(
-                    a = chA, b = chB,
-                    levelA = lA, levelB = lB, peakA = pA, peakB = pB,
-                    style = meterStyle
-                )
-                // dB scale
-                Column(
-                    modifier = Modifier.height(150.dp).padding(bottom = 18.dp),
-                    verticalArrangement = Arrangement.SpaceBetween
+            if (meterStyle == 3) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    listOf("0", "−12", "−24", "−36", "−48", "−60").forEach {
-                        Text(it, color = TextDim, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                    listOf(Triple(chA, lA, pA), Triple(chB, lB, pB)).forEach { (ch, lv, pk) ->
+                        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                            AnalogVuMeter(
+                                levelDb = lv, peakDb = pk, label = ch.label, isSub = ch.isSub,
+                                modifier = Modifier.fillMaxWidth().aspectRatio(1.5f)
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            ReadoutRow(ch.label, lv)
+                        }
                     }
                 }
-                // Readout besar: kanal yang lebih keras
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.End
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val loud = if (lA >= lB) chA else chB
-                    val loudDb = maxOf(lA, lB)
-                    Text(
-                        loud.label,
-                        color = TextMuted,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                    Text(
-                        fmtDb(loudDb),
-                        color = dbColor(loudDb),
-                        fontSize = 36.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = (-1).sp
-                    )
-                    Text("dB", color = TextMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                    Spacer(Modifier.height(12.dp))
                     ReadoutRow("PK ", maxOf(pA, pB))
                     ReadoutRow("SES", sesMax)
-                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "RESET PEAKS",
+                        "RESET",
                         color = AccentCyan, fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .clickable {
                                 meters.values.forEach { it.resetPeaks() }
+                                subPeak.resetPeaks()
                                 snaps = meters.mapValues { it.value.snapshot() }
+                                subSnap = subPeak.snapshot()
                             }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(180.dp),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MeterPair(
+                        a = chA, b = chB,
+                        levelA = lA, levelB = lB, peakA = pA, peakB = pB,
+                        style = meterStyle
+                    )
+                    // dB scale
+                    Column(
+                        modifier = Modifier.height(150.dp).padding(bottom = 18.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        listOf("0", "−12", "−24", "−36", "−48", "−60").forEach {
+                            Text(it, color = TextDim, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                    // Readout besar: kanal yang lebih keras
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        val loud = if (lA >= lB) chA else chB
+                        val loudDb = maxOf(lA, lB)
+                        Text(
+                            loud.label,
+                            color = TextMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                        Text(
+                            fmtDb(loudDb),
+                            color = dbColor(loudDb),
+                            fontSize = 36.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = (-1).sp
+                        )
+                        Text("dB", color = TextMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        Spacer(Modifier.height(12.dp))
+                        ReadoutRow("PK ", maxOf(pA, pB))
+                        ReadoutRow("SES", sesMax)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "RESET PEAKS",
+                            color = AccentCyan, fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    meters.values.forEach { it.resetPeaks() }
+                                    subPeak.resetPeaks()
+                                    snaps = meters.mapValues { it.value.snapshot() }
+                                    subSnap = subPeak.snapshot()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
         }
@@ -260,6 +314,36 @@ fun MonitorScreen(
                 if (extra.isEmpty()) {
                     Text("Menunggu data sub nirkabel…", color = TextMuted, fontSize = 12.sp)
                 } else {
+                    if (meterStyle == 3) {
+                        // Dial analog: maks. 2 per baris agar tetap terbaca di layar HP
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            extra.chunked(2).forEach { rowChs ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    rowChs.forEach { ch ->
+                                        val sn = snaps[ch.id]
+                                        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                            AnalogVuMeter(
+                                                levelDb = sn.levelDb(isAvg), peakDb = sn.peakDb(),
+                                                label = ch.label, isSub = ch.isSub,
+                                                modifier = Modifier.fillMaxWidth().aspectRatio(1.5f)
+                                            )
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                if (sn == null) "n/a" else fmtDb(sn.levelDb(isAvg)),
+                                                color = if (sn == null) TextDim else if (ch.isSub) AccentAmber else dbColor(sn.levelDb(isAvg)),
+                                                fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                    if (rowChs.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    } else {
                     Row(
                         modifier = Modifier.fillMaxWidth().height(160.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -273,9 +357,63 @@ fun MonitorScreen(
                             )
                         }
                     }
+                    }
                 }
             }
         }
+
+        // ── Puncak subwoofer ───────────────────────────────
+        val hasSubCh = (listOf(chA, chB) + extra).any { it.isSub }
+        if (hasSubCh) {
+            SubPeakCard(subSnap)
+        }
+    }
+}
+
+@Composable
+private fun SubPeakCard(snap: SubPeakSnapshot?) {
+    GlassCard {
+        CardTitle(text = "Puncak Subwoofer", trailing = { GlassBadge("hold 3 dtk") })
+        if (snap == null) {
+            Text("Menunggu data level sub…", color = TextMuted, fontSize = 12.sp)
+            return@GlassCard
+        }
+        val now = snap.now / 10f
+        val hold = snap.hold / 10f
+        val ses = snap.session / 10f
+        HorizontalLevelMeter(
+            levelDb = now, peakDb = hold,
+            modifier = Modifier.fillMaxWidth(), barHeight = 14.dp
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            SubStat("PUNCAK", fmtDb(hold), dbColor(hold))
+            SubStat("SESI", fmtDb(ses), dbColor(ses))
+            SubStat("HEADROOM", "%.1f".format(snap.headroomDb), if (snap.headroomDb < 1f) BadRed else OkGreen)
+            SubStat("CREST≈", "%.1f".format(snap.crestDb), TextSecondary)
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            SubStat("≥ −3 dB", "${snap.nearHits}×", if (snap.nearHits > 0) WarnAmber else TextDim)
+            SubStat("CLIP ≥ −1", "${snap.clipHits}×", if (snap.clipHits > 0) BadRed else TextDim)
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Level dicuplik ±3×/dtk dari chip; puncak sangat singkat di antara dua cuplikan bisa terlewat. " +
+                "CREST = puncak − rata-rata cuplikan (perkiraan).",
+            color = TextDim, fontSize = 10.sp
+        )
+    }
+}
+
+@Composable
+private fun SubStat(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.Start) {
+        Text(label, color = TextMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+        Text(
+            value, color = color, fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace
+        )
     }
 }
 
@@ -318,70 +456,15 @@ private fun VerticalMeter(
     meterStyle: Int,
     isSub: Boolean = false
 ) {
-    val animated by animateFloatAsState(
-        targetValue = ((level.coerceIn(-60f, 0f) + 60f) / 60f),
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 800f),
-        label = "meter"
+    // Gambar + animasi fast-attack/slow-release ada di ui/components/LevelMeter.kt
+    VerticalLevelMeter(
+        levelDb = level,
+        peakDb = peak,
+        modifier = modifier,
+        isSub = isSub,
+        isClipping = peak >= -1f,   // peak-hold per kanal ≥ −1 dB → batang ikut berkedip merah
+        style = meterStyle,
     )
-    val peakFrac = ((peak.coerceIn(-60f, 0f) + 60f) / 60f)
-
-    Canvas(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(alpha = 0.04f))
-    ) {
-        val brush = Brush.verticalGradient(
-            colorStops = if (isSub) arrayOf(
-                0f    to Color(0xFFCA8A04),
-                0.55f to Color(0xFFEAB308),
-                0.72f to Color(0xFFF59E0B),
-                0.86f to Color(0xFFF97316),
-                1f    to BadRed
-            ) else arrayOf(
-                0f    to OkGreen,
-                0.55f to OkGreen,
-                0.66f to Color(0xFF84CC16),
-                0.78f to WarnAmber,
-                0.90f to Color(0xFFF97316),
-                1f    to BadRed
-            ),
-            startY = size.height,
-            endY = 0f
-        )
-        if (meterStyle == 1) {            // Segmented: 20 blok
-            val n = 20
-            val gap = 2.dp.toPx()
-            val segH = (size.height - gap * (n - 1)) / n
-            val lit = (animated * n).toInt()
-            for (i in 0 until n) {
-                val frac = (i + 1f) / n
-                val c = if (isSub) { if (frac < 0.72f) Color(0xFFEAB308) else if (frac < 0.86f) Color(0xFFF97316) else BadRed }
-                        else { if (frac < 0.66f) OkGreen else if (frac < 0.86f) WarnAmber else BadRed }
-                drawRect(
-                    color = c.copy(alpha = if (i < lit) 1f else 0.12f),
-                    topLeft = Offset(0f, size.height - (i + 1) * segH - i * gap),
-                    size = Size(size.width, segH)
-                )
-            }
-        } else if (meterStyle == 2) {     // Minimal: satu warna datar
-            val flat = if (animated > 0.9f) BadRed else if (isSub) Color(0xFFEAB308) else OkGreen
-            val mh = size.height * animated
-            if (mh > 0f) drawRect(flat, Offset(0f, size.height - mh), Size(size.width, mh))
-        }
-        val h = if (meterStyle == 0) size.height * animated else 0f
-        if (h > 0f) {
-            drawRect(
-                brush = brush,
-                topLeft = Offset(0f, size.height - h),
-                size = Size(size.width, h)
-            )
-        }
-        // Peak hold line
-        if (peakFrac > 0.001f) {
-            val y = size.height * (1f - peakFrac)
-            drawLine(Color.White, Offset(0f, y), Offset(size.width, y), strokeWidth = 2.dp.toPx())
-        }
-    }
 }
 
 @Composable

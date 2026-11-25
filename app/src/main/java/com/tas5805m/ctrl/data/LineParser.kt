@@ -17,7 +17,7 @@ object LineParser {
     )
 
     /** `OK <perintah>` ini tidak menghapus pesan ERR terakhir (hanya balasan sinkron/poll). */
-    private val SYNC_OK = setOf("status", "dump", "eqdump", "fault", "caps", "info", "saved", "modget", "clipget", "dacget")
+    val SYNC_OK = setOf("status", "dump", "eqdump", "fault", "caps", "info", "saved", "modget", "clipget", "dacget")
 
     fun apply(s: AmpState, line: String, nowMs: Long = System.currentTimeMillis()): AmpState {
         val head = line.substringBefore(' ')
@@ -52,9 +52,13 @@ object LineParser {
             "WSUBD" -> ns = parseWsubDiag(ns, line)
             "WSUBT", "WSUBC", "BTD", "INFO", "CLIP", "MOD", "DAC", "DAC2", "EQP2" ->
                 ns = ns.copy(tags = ns.tags + (head to kvOf(line)))
-            "BTEV" -> ns = ns.copy(
-                btEvents = (ns.btEvents + (stamp(nowMs) + " " + line.removePrefix("BTEV ").trim())).takeLast(40)
-            )
+            "BTEV" -> {
+                // Firmware mengirim 1 event per polling, jadi waktu terima ≠ waktu kejadian: kurangi `age=` (ms sejak kejadian).
+                val age = Regex("""\bage=(\d+)""").find(line)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+                ns = ns.copy(
+                    btEvents = (ns.btEvents + (stamp(nowMs - age) + " " + line.removePrefix("BTEV ").trim())).takeLast(40)
+                )
+            }
             "SAVED" -> ns = ns.copy(saved = line.trim().endsWith("1"))
             "ERR" -> ns = ns.copy(lastError = line, errCount = ns.errCount + 1)
             "OK" -> {

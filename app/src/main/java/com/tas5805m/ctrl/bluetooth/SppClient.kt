@@ -106,6 +106,17 @@ class SppClient(private val context: Context) {
             delay(180)
             send("status")
             delay(1500)
+            // Firmware tanpa `dump` (atau balasan hilang): buka UI, tapi tandai sebagian nilai mungkin masih bawaan.
+            _state.update {
+                val base = if (it.synced) it else it.copy(synced = true, syncPartial = true)
+                base.copy(
+                    measureRunning = false,
+                    measurePaused = false,
+                    measureAccumMs = 0L,
+                    measureSegmentStartMs = 0L,
+                    sessionLines = emptyList(),
+                )
+            }
             captureBaseline()
             true
         } catch (e: Exception) {
@@ -122,7 +133,14 @@ class SppClient(private val context: Context) {
         writerJob = null
         try { socket?.close() } catch (_: Exception) {}
         socket = null
-        _state.update { it.copy(connected = false) }
+        _state.update {
+            it.copy(
+                connected = false,
+                measureRunning = false,
+                measurePaused = false,
+                measureSegmentStartMs = 0L,
+            )
+        }
     }
 
     private fun startWriter(sock: BluetoothSocket) {
@@ -138,7 +156,14 @@ class SppClient(private val context: Context) {
                     out.flush()
                     Log.d(TAG, ">> $cmd")
                     if (cmd.trim() !in POLL_CMDS) {
-                        _state.update { it.copy(lastLines = (listOf("> " + cmd.trim()) + it.lastLines).take(LineParser.LOG_MAX)) }
+                        val entry = "> " + cmd.trim()
+                        _state.update { st ->
+                            val lines = (listOf(entry) + st.lastLines).take(LineParser.LOG_MAX)
+                            val sess = if (st.measureRunning) {
+                                (listOf(entry) + st.sessionLines).take(LineParser.SESSION_LOG_MAX)
+                            } else st.sessionLines
+                            st.copy(lastLines = lines, sessionLines = sess)
+                        }
                     }
                     delay(TX_GAP_MS)
                 }
@@ -277,8 +302,37 @@ class SppClient(private val context: Context) {
         send(v.command())
     }
 
+    /** PEQ sub (firmware >= 2.9.27): optimistis seperti [setVoice] — UI memegang band terbaru sebelum `WSUBE` datang. */
+    fun setPeqOn(on: Boolean) {
+        _state.update { it.copy(peq = it.peq.copy(on = on)) }
+        send("wsub_peq ${if (on) 1 else 0}")
+    }
+    fun setPeqBand(index: Int, band: com.tas5805m.ctrl.data.PeqBand) {
+        if (index !in 0 until com.tas5805m.ctrl.data.PEQ_BANDS) return
+        val b = band.sanitized()
+        _state.update { it.copy(peq = it.peq.withBand(index, b)) }
+        send(b.command(index))
+    }
+    fun resetPeq() {
+        _state.update { it.copy(peq = com.tas5805m.ctrl.data.PeqParams()) }
+        send("wsub_peq_reset")
+    }
+    /** Terapkan satu set PEQ penuh (preset): 7 band lalu saklar on/off. Tiap perintah memicu status penuh → beri jeda. */
+    suspend fun setPeq(p: com.tas5805m.ctrl.data.PeqParams) {
+        val q = p.sanitized()
+        _state.update { it.copy(peq = q) }
+        for (i in 0 until com.tas5805m.ctrl.data.PEQ_BANDS) { send(q.bands[i].command(i)); delay(40) }
+        send("wsub_peq ${if (q.on) 1 else 0}")
+    }
+
     // ---- v3.11: DSP lanjutan & diagnosa ------------------------------------
-    fun setClip(gain: Int, l: Int, r: Int) = send("clipset ${gain.coerceIn(-300, 0)} ${l.coerceIn(0, 300)} ${r.coerceIn(0, 300)}")
+    fun setClip(gain: Int, l: Int, r: Int) {
+        val g = gain.coerceIn(com.tas5805m.ctrl.data.ClipRules.GAIN_MIN, com.tas5805m.ctrl.data.ClipRules.GAIN_MAX)
+        val m = com.tas5805m.ctrl.data.ClipRules.maxMakeup(g)
+        send("clipset $g ${l.coerceIn(0, m)} ${r.coerceIn(0, m)}")
+    }
+    /** Firmware dengan CAPS `clipoff`: clipper kembali ke default chip (nonaktif). */
+    fun clipOff() = send("clipoff")
     fun setMod(mode: String, freq: String, bd: String) = send("modset $mode $freq $bd")
     fun setDac(mode: String) = send("dacset $mode")
     /** ch: l | r | b ; n: 0..20 (0 FLAT, 1..10 LPF 60..150, 11..20 HPF 60..150). */
@@ -294,14 +348,86 @@ class SppClient(private val context: Context) {
         _state.update { it.copy(baseline = Diagnosis.counters(it), baselineAtMs = System.currentTimeMillis()) }
     }
 
-    /** Nolkan counter TX di firmware (`wsub_diag_reset`) lalu ukur ulang; riwayat fault sesi ikut dihapus. */
+    /**
+     * Mulai jendela ukur diagnosa.
+     * Default: hanya set baseline (counter firmware tidak di-nolkan).
+     * [resetFirmware]=true → kirim `wsub_diag_reset` dulu (perilaku lama "Reset ukur").
+     * Jika sesi sedang pause, memanggil ini tanpa reset = resume.
+     */
+    suspend fun startMeasure(resetFirmware: Boolean = false) {
+        val st = _state.value
+        if (st.measureRunning && st.measurePaused && !resetFirmware) {
+            resumeMeasure()
+            return
+        }
+        if (resetFirmware) {
+            if (st.hasWsub || st.isWireless) send("wsub_diag_reset")
+            delay(400)
+            send("status")
+            delay(900)
+            _state.update { it.copy(faultHistory = emptyList()) }
+        }
+        val now = System.currentTimeMillis()
+        _state.update {
+            it.copy(
+                baseline = Diagnosis.counters(it),
+                baselineAtMs = now,
+                measureRunning = true,
+                measurePaused = false,
+                measureAccumMs = 0L,
+                measureSegmentStartMs = now,
+                sessionLines = emptyList(), // buffer log sesi baru
+            )
+        }
+    }
+
+    /** Jeda ukur: freeze timer, hentikan penambahan elapsed; baseline tetap. */
+    fun pauseMeasure() {
+        val now = System.currentTimeMillis()
+        _state.update { s ->
+            if (!s.measureRunning || s.measurePaused) return@update s
+            val add = if (s.measureSegmentStartMs > 0L) (now - s.measureSegmentStartMs).coerceAtLeast(0L) else 0L
+            s.copy(
+                measurePaused = true,
+                measureAccumMs = s.measureAccumMs + add,
+                measureSegmentStartMs = 0L,
+            )
+        }
+    }
+
+    /** Lanjutkan setelah pause (tanpa reset baseline). */
+    fun resumeMeasure() {
+        val now = System.currentTimeMillis()
+        _state.update { s ->
+            if (!s.measureRunning || !s.measurePaused) return@update s
+            s.copy(measurePaused = false, measureSegmentStartMs = now)
+        }
+    }
+
+    /**
+     * Stop ukur: freeze timer, nonaktifkan running.
+     * Laporan tidak disimpan otomatis — UI menampilkan dulu, user tekan Simpan.
+     * Baseline tetap ada supaya finding/delta masih bisa dibaca sampai Start berikutnya.
+     */
+    fun stopMeasure() {
+        val now = System.currentTimeMillis()
+        _state.update { s ->
+            if (!s.measureRunning && s.baselineAtMs <= 0L) return@update s
+            val add = if (s.measureRunning && !s.measurePaused && s.measureSegmentStartMs > 0L) {
+                (now - s.measureSegmentStartMs).coerceAtLeast(0L)
+            } else 0L
+            s.copy(
+                measureRunning = false,
+                measurePaused = false,
+                measureAccumMs = s.measureAccumMs + add,
+                measureSegmentStartMs = 0L,
+            )
+        }
+    }
+
+    /** Nolkan counter TX di firmware (`wsub_diag_reset`) lalu mulai ukur ulang; riwayat fault sesi ikut dihapus. */
     suspend fun resetDiagnostics() {
-        if (_state.value.hasWsub || _state.value.isWireless) send("wsub_diag_reset")
-        delay(400)
-        send("status")
-        delay(900)
-        _state.update { it.copy(faultHistory = emptyList()) }
-        captureBaseline()
+        startMeasure(resetFirmware = true)
     }
 
     /** Kirim perintah mentah dari terminal (dibersihkan, maks 200 karakter sesuai firmware). */
@@ -367,7 +493,8 @@ class SppClient(private val context: Context) {
         }
         if (st2.hasWsub) {
             p.trim?.let { wsubTrim(it) }
-            p.voice?.let { if (st2.hasVoice) setVoice(it) }
+            p.voice?.let { if (st2.hasVoice) { setVoice(it); delay(60) } }
+            p.peq?.let { if (st2.hasPeq) setPeq(it) }
         }
         delay(100)
         requestStatus()
@@ -414,6 +541,7 @@ class SppClient(private val context: Context) {
         if (mode == 0 || p.eqOn) setEq(p.eqOn)
         sendEqBands(p, mode)
         if (st.hasWsub && st.hasVoice) p.voice?.let { setVoice(it); delay(60) }
+        if (st.hasWsub && st.hasPeq) p.peq?.let { setPeq(it); delay(60) }
         delay(100)
         requestStatus()
         requestEqDump()

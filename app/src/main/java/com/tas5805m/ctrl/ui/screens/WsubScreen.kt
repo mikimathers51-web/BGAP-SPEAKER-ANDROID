@@ -10,6 +10,7 @@ import com.tas5805m.ctrl.ui.theme.WarnAmber
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -43,16 +44,28 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tas5805m.ctrl.data.AmpState
+import com.tas5805m.ctrl.ui.components.NotReady
 import com.tas5805m.ctrl.data.AppViewModel
 import com.tas5805m.ctrl.data.Diagnosis
 import com.tas5805m.ctrl.data.FillSample
 import com.tas5805m.ctrl.data.PeerDetail
+import com.tas5805m.ctrl.data.PeqBand
+import com.tas5805m.ctrl.data.PeqMath
+import com.tas5805m.ctrl.data.PeqParams
+import com.tas5805m.ctrl.data.PeqType
+import com.tas5805m.ctrl.data.PEQ_G2_MAX
+import com.tas5805m.ctrl.data.PEQ_G2_MIN
+import com.tas5805m.ctrl.data.PEQ_HZ_MAX
+import com.tas5805m.ctrl.data.PEQ_HZ_MIN
+import com.tas5805m.ctrl.data.PEQ_Q_MAX
+import com.tas5805m.ctrl.data.PEQ_Q_MIN
 import com.tas5805m.ctrl.data.VoiceParams
 import com.tas5805m.ctrl.data.faultNames
 import com.tas5805m.ctrl.ui.components.SendSlider
 import com.tas5805m.ctrl.ui.components.SendSliderInt
 import kotlinx.coroutines.delay
 import kotlin.math.abs
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -75,10 +88,8 @@ fun WsubScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    if (!state.connected) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Hubungkan perangkat dulu")
-        }
+    if (!state.ready) {
+        NotReady(state, modifier)
         return
     }
 
@@ -93,7 +104,8 @@ fun WsubScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     val gap = state.wsubGap
 
     LazyColumn(
-        modifier = modifier.fillMaxSize().padding(16.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),   // bukan padding luar: kartu tidak terpotong di tepi atas/bawah
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item(key = "header") {
@@ -184,6 +196,18 @@ fun WsubScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             }
         }
 
+        if (state.hasPeq) {
+            item(key = "peq") {
+                PeqCard(
+                    peq = state.peq,
+                    warn = Diagnosis.peqWarning(state),
+                    onOn = { spp.setPeqOn(it) },
+                    onBand = { i, b -> spp.setPeqBand(i, b) },
+                    onReset = { spp.resetPeq() },
+                )
+            }
+        }
+
         item(key = "radio") {
             RadioCard(state)
         }
@@ -195,6 +219,7 @@ fun WsubScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                 "• Grafik hanya update jika nilai berubah (hemat CPU)\n" +
                 "• Poll status 1,5 dtk · level sub ±3×/dtk · history max ${AmpState.HISTORY_MAX} titik\n" +
                 "• Voicing sub (di DSP chip): slave ≥ 2.9.19; peaking bebas (frekuensi/Q/gain 0,5 dB) di slave ≥ 2.9.20. Disimpan otomatis di master\n" +
+                "• PEQ sub (7 band di DSP chip): slave ≥ 2.9.27, master dengan CAPS wsub_peq. Berlaku untuk semua sub. Disimpan otomatis di master\n" +
                 "• Unpair di slave: tahan BOOT 3 detik",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
@@ -536,6 +561,136 @@ private fun VoiceCard(v: VoiceParams, warn: String?, free: Boolean, onChange: (V
             Spacer(Modifier.height(4.dp))
             OutlinedButton(onClick = { onChange(VoiceParams(on = false)) }) { Text("Reset / OFF") }
         }
+    }
+}
+
+/**
+ * PEQ sub (firmware ≥ 2.9.27): 7 band parametrik di DSP chip slave, global untuk semua slave. Perintah: `wsub_peq`, `wsub_peq_band`.
+ * Satu editor untuk band terpilih (hemat tempat) + kurva respons total. Mengubah band yang mati otomatis menyalakannya sebagai Peak.
+ */
+@Composable
+private fun PeqCard(
+    peq: PeqParams,
+    warn: String?,
+    onOn: (Boolean) -> Unit,
+    onBand: (Int, PeqBand) -> Unit,
+    onReset: () -> Unit,
+) {
+    var sel by remember { mutableIntStateOf(0) }
+    val band = peq.bands.getOrElse(sel) { PeqBand() }
+    val enabled = band.type != PeqType.OFF
+    // Mengedit band yang sedang mati = menyalakannya sebagai Peak (gain 0 tetap tidak berefek sampai digeser).
+    fun edit(b: PeqBand) = onBand(sel, if (b.type == PeqType.OFF) b.copy(type = PeqType.PEAK) else b)
+
+    GlassCard(contentPadding = 0.dp) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("EQ Parametrik Sub (PEQ)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Switch(checked = peq.on, onCheckedChange = onOn)
+            }
+            Text(
+                "7 band di DSP chip slave: peaking atau shelf, 20–250 Hz, gain −12…+9 dB (langkah 0,5 dB). Berlaku untuk semua sub; butuh slave ≥ 2.9.27.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+            if (warn != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(warn, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(10.dp))
+
+            PeqCurve(peq = peq, modifier = Modifier.fillMaxWidth().height(110.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                val dim = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                Text("20 Hz", style = MaterialTheme.typography.labelSmall, color = dim)
+                Text("garis tengah = 0 dB · skala ±12 dB", style = MaterialTheme.typography.labelSmall, color = dim)
+                Text("250 Hz", style = MaterialTheme.typography.labelSmall, color = dim)
+            }
+            Spacer(Modifier.height(10.dp))
+
+            // Pemilih band: bingkai berwarna = band aktif (mengubah sinyal), latar = band terpilih.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                peq.bands.forEachIndexed { i, b ->
+                    val primary = MaterialTheme.colorScheme.primary
+                    val shape = RoundedCornerShape(8.dp)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(shape)
+                            .background(if (sel == i) primary.copy(alpha = 0.25f) else Color.Transparent)
+                            .border(1.dp, if (b.active) primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), shape)
+                            .clickable { sel = i },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("${i + 1}", style = MaterialTheme.typography.labelLarge, fontWeight = if (sel == i) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // key(sel): slider dibuat ulang saat ganti band, supaya tidak membawa nilai lokal band sebelumnya.
+            key(sel) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Band ${sel + 1}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    Text(if (enabled) "aktif" else "mati", style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = enabled,
+                        onCheckedChange = { on ->
+                            onBand(
+                                sel,
+                                if (on) band.copy(type = PeqType.PEAK, g2 = if (band.g2 == 0) 4 else band.g2)
+                                else band.copy(type = PeqType.OFF)
+                            )
+                        }
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(PeqType.PEAK to "Peak", PeqType.LSHELF to "L-shelf", PeqType.HSHELF to "H-shelf").forEach { (t, name) ->
+                        FilterChip(
+                            selected = band.type == t,
+                            onClick = { onBand(sel, band.copy(type = t, g2 = if (band.g2 == 0) 4 else band.g2)) },
+                            label = { Text(name) }
+                        )
+                    }
+                }
+                VoiceSlider("Frekuensi", "${band.hz} Hz", band.hz, PEQ_HZ_MIN..PEQ_HZ_MAX) { edit(band.copy(hz = it)) }
+                val gtxt = String.format(java.util.Locale.US, "%+.1f dB", band.g2 * 0.5f)
+                VoiceSlider("Gain", gtxt, band.g2, PEQ_G2_MIN..PEQ_G2_MAX) { edit(band.copy(g2 = it)) }
+                VoiceSlider("Q", String.format(java.util.Locale.US, "%.1f", band.q10 / 10f), band.q10, PEQ_Q_MIN..PEQ_Q_MAX) { edit(band.copy(q10 = it)) }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            OutlinedButton(onClick = onReset) { Text("Reset PEQ") }
+        }
+    }
+}
+
+/** Kurva respons total PEQ (20–250 Hz, skala log; ±12 dB). Redup bila PEQ dimatikan (pratinjau setelan tersimpan). */
+@Composable
+private fun PeqCurve(peq: PeqParams, modifier: Modifier = Modifier) {
+    val grid = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+    val line = if (peq.on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+    val pts = remember(peq) { PeqMath.curve(peq, 96, respectOn = false) }
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val range = 12f
+        fun y(db: Float) = h / 2f - (db.coerceIn(-range, range) / range) * (h / 2f)
+        for (g in listOf(-12f, -6f, 0f, 6f, 12f)) {
+            drawLine(grid, Offset(0f, y(g)), Offset(w, y(g)), strokeWidth = if (g == 0f) 2f else 1f)
+        }
+        for (hz in listOf(50f, 100f)) {
+            val x = w * (ln(hz / PEQ_HZ_MIN) / ln(PEQ_HZ_MAX.toFloat() / PEQ_HZ_MIN))
+            drawLine(grid, Offset(x, 0f), Offset(x, h), strokeWidth = 1f)
+        }
+        val path = Path()
+        pts.forEachIndexed { i, db ->
+            val x = w * i / (pts.size - 1)
+            if (i == 0) path.moveTo(x, y(db)) else path.lineTo(x, y(db))
+        }
+        drawPath(path, line, style = Stroke(width = 4f, cap = StrokeCap.Round))
     }
 }
 

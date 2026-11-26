@@ -5,6 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,6 +53,7 @@ import com.tas5805m.ctrl.ui.theme.OkGreen
 import com.tas5805m.ctrl.ui.theme.WarnAmber
 
 /** Koneksi — kartu "Perangkat Terhubung", daftar perangkat ter-pair, dan pengaturan tampilan/sambung otomatis. */
+@OptIn(ExperimentalLayoutApi::class)
 @SuppressLint("MissingPermission")
 @Composable
 fun ConnectScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
@@ -57,7 +61,12 @@ fun ConnectScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     val bonded by vm.bonded.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
 
-    LazyColumn(modifier = modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        // contentPadding (bukan padding luar) agar kartu ikut scroll sampai tepi, tidak terpotong 16 dp di bawah header/navbar
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
         // —— Perangkat terhubung ——
         item {
             GlassCard {
@@ -132,30 +141,21 @@ fun ConnectScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         item {
             GlassCard {
                 CardTitle("Tampilan & Koneksi")
-                // 7 tema ala HTML Final v4 — 3+4 agar label tidak pecah vertikal di layar sempit
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // 7 tema; FlowRow agar chip otomatis turun baris di layar sempit (tidak ada yang keluar layar).
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     listOf(
-                        listOf(ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT),
-                        listOf(ThemeMode.AMOLED, ThemeMode.NORD, ThemeMode.SUNSET, ThemeMode.FOREST),
-                    ).forEach { row ->
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            row.forEach { m ->
-                                FilterChip(
-                                    selected = settings.theme == m,
-                                    onClick = { vm.setTheme(m) },
-                                    label = {
-                                        Text(
-                                            m.label,
-                                            maxLines = 1,
-                                            softWrap = false,
-                                        )
-                                    },
-                                )
-                            }
-                        }
+                        ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT,
+                        ThemeMode.AMOLED, ThemeMode.NORD, ThemeMode.SUNSET, ThemeMode.FOREST,
+                    ).forEach { m ->
+                        FilterChip(
+                            selected = settings.theme == m,
+                            onClick = { vm.setTheme(m) },
+                            label = { Text(m.label, maxLines = 1, softWrap = false) },
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))

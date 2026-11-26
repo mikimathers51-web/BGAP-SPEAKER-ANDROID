@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tas5805m.ctrl.data.AppViewModel
+import com.tas5805m.ctrl.ui.components.NotReady
 import com.tas5805m.ctrl.data.MeterChannel
 import com.tas5805m.ctrl.data.MeterSnapshot
 import com.tas5805m.ctrl.data.MonitorChannel
@@ -100,10 +101,8 @@ fun MonitorScreen(
         }
     }
 
-    if (!state.connected) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Hubungkan perangkat dulu", color = Color.Gray)
-        }
+    if (!state.ready) {
+        NotReady(state, modifier)
         return
     }
 

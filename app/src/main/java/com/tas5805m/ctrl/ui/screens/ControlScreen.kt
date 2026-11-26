@@ -46,6 +46,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tas5805m.ctrl.bluetooth.SppClient
 import com.tas5805m.ctrl.data.AmpState
 import com.tas5805m.ctrl.data.AppViewModel
+import com.tas5805m.ctrl.ui.components.NotReady
+import com.tas5805m.ctrl.ui.components.SyncWarning
 import com.tas5805m.ctrl.ui.components.CardTitle
 import com.tas5805m.ctrl.ui.components.GlassBadge
 import com.tas5805m.ctrl.ui.components.GlassCard
@@ -331,14 +333,8 @@ fun ControlScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     val state by vm.state.collectAsStateWithLifecycle()
     val spp = vm.spp
 
-    if (!state.connected) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.BluetoothDisabled, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.outline)
-                Spacer(Modifier.height(12.dp))
-                Text("Hubungkan perangkat di tab Koneksi", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+    if (!state.ready) {
+        NotReady(state, modifier)
         return
     }
 
@@ -359,6 +355,7 @@ fun ControlScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        SyncWarning(state)
         // —— Master volume: angka besar + slider ——
         GlassCard {
             CardTitle("Master Volume", trailing = { GlassBadge(state.modeName()) })

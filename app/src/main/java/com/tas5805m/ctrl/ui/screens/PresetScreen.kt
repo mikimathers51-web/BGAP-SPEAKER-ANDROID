@@ -37,6 +37,7 @@ private fun describe(p: Preset): String = when (p.kind) {
     else -> buildString {
         append("Mode ${p.mode} · Xover ${p.xover} Hz · Master ${p.master}")
         if (p.voice != null) append(" · voicing")
+        if (p.peq != null) append(" · PEQ sub")
         if (p.clip != null) append(" · clipper")
         if (p.trim != null) append(" · trim ${p.trim}")
     }
@@ -50,11 +51,12 @@ private fun kindLabel(p: Preset): String = when (p.kind) {
 }
 
 private fun canApply(p: Preset, s: AmpState): Boolean =
-    s.connected && (p.kind != "voice" || (s.hasWsub && s.hasVoice))
+    s.ready && (p.kind != "voice" || (s.hasWsub && s.hasVoice))
 
 /** Alasan tombol Terapkan nonaktif (null bila aktif). */
 private fun disabledReason(p: Preset, s: AmpState): String? = when {
     !s.connected -> "Belum terhubung."
+    !s.synced -> "Menyinkronkan dengan perangkat…"
     p.kind == "voice" && !(s.hasWsub && s.hasVoice) -> "Butuh sub nirkabel dengan slave ≥ 2.9.19."
     else -> null
 }
@@ -138,13 +140,13 @@ fun PresetScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                         singleLine = true,
                     )
                     Button(
-                        onClick = { if (state.connected) { vm.savePreset(name); name = ""; notice = "Preset disimpan." } },
-                        enabled = state.connected,
+                        onClick = { if (state.ready) { vm.savePreset(name); name = ""; notice = "Preset disimpan." } },
+                        enabled = state.ready,
                     ) { Text("Simpan") }
                 }
                 OutlinedButton(
-                    onClick = { if (state.connected) { vm.saveScene(name); name = ""; notice = "Scene disimpan (EQ + voicing sub)." } },
-                    enabled = state.connected,
+                    onClick = { if (state.ready) { vm.saveScene(name); name = ""; notice = "Scene disimpan (EQ + voicing sub)." } },
+                    enabled = state.ready,
                 ) { Text("Simpan sebagai Scene (EQ + voicing)") }
                 Text(
                     "Preset lengkap menyimpan mode, xover, volume, gain, mixer, EQ 15 band, serta (bila ada) clipper, polaritas sub, standby, trim, voicing sub, dan EQ center/sub.",

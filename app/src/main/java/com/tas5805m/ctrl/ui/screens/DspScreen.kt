@@ -23,6 +23,8 @@ import com.tas5805m.ctrl.ui.theme.OkGreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tas5805m.ctrl.bluetooth.SppClient
 import com.tas5805m.ctrl.data.AmpState
+import com.tas5805m.ctrl.ui.components.NotReady
+import com.tas5805m.ctrl.data.ClipRules
 import com.tas5805m.ctrl.data.AppViewModel
 import com.tas5805m.ctrl.ui.components.SendSlider
 import com.tas5805m.ctrl.ui.components.SendSliderInt
@@ -39,14 +41,8 @@ fun DspScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     val state by vm.state.collectAsStateWithLifecycle()
     val spp = vm.spp
 
-    if (!state.connected) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.BluetoothDisabled, null, tint = Color.Gray)
-                Spacer(Modifier.height(12.dp))
-                Text("Hubungkan perangkat di tab Koneksi", color = Color.Gray)
-            }
-        }
+    if (!state.ready) {
+        NotReady(state, modifier)
         return
     }
 
@@ -237,19 +233,48 @@ private fun EqProfileCard(s: AmpState, spp: SppClient) {
 
 @Composable
 private fun ClipCard(s: AmpState, spp: SppClient) {
-    val g = s.tagInt("CLIP", "gain") ?: 0
-    val ml = s.tagInt("CLIP", "ml") ?: 0
-    val mr = s.tagInt("CLIP", "mr") ?: 0
-    DspCard("Clipper chip", "Pembatas puncak di chip. Satuan 0,1 dB. Salah setel membuat suara terdistorsi.") {
-        Labeled("Gain clipper", "${g / 10f} dB") {
-            SendSliderInt(g, { spp.setClip(it, ml, mr) }, -300..0, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
+    val g = (s.tagInt("CLIP", "gain") ?: 0).coerceIn(ClipRules.GAIN_MIN, ClipRules.GAIN_MAX)
+    val maxMk = ClipRules.maxMakeup(g)
+    val ml = (s.tagInt("CLIP", "ml") ?: 0).coerceIn(0, maxMk)
+    val mr = (s.tagInt("CLIP", "mr") ?: 0).coerceIn(0, maxMk)
+    // Firmware baru mengirim en=0|1; firmware lama: 0/0/0 dianggap nonaktif.
+    val on = s.clipEnabled ?: (g != 0 || ml != 0 || mr != 0)
+    DspCard(
+        "Clipper chip",
+        if (on) "Pembatas puncak di chip. Satuan 0,1 dB. Salah setel membuat suara terdistorsi."
+        else "Nonaktif (default chip). Menggeser slider mana pun akan mengaktifkan clipper.",
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (on) "Aktif" else "Nonaktif",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (on) OkGreen else Color.Gray,
+                modifier = Modifier.weight(1f),
+            )
+            if (s.hasClipOff) OutlinedButton(onClick = { spp.clipOff() }, enabled = on) { Text("Matikan") }
         }
-        Labeled("Batas kiri (ml)", "$ml") {
-            SendSliderInt(ml, { spp.setClip(g, it, mr) }, 0..300, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
+        Labeled("Gain clipper", ClipRules.fmtDb(g)) {
+            SendSliderInt(
+                g,
+                { ng ->
+                    val m = ClipRules.maxMakeup(ng)   // makeup ikut dipotong agar tidak melewati batas register
+                    spp.setClip(ng, ml.coerceAtMost(m), mr.coerceAtMost(m))
+                },
+                ClipRules.GAIN_MIN..ClipRules.GAIN_MAX, throttleMs = 300L, modifier = Modifier.fillMaxWidth(),
+            )
         }
-        Labeled("Batas kanan (mr)", "$mr") {
-            SendSliderInt(mr, { spp.setClip(g, ml, it) }, 0..300, throttleMs = 300L, modifier = Modifier.fillMaxWidth())
+        Labeled("Makeup kiri", ClipRules.fmtDb(ml)) {
+            SendSliderInt(ml, { spp.setClip(g, it, mr) }, 0..maxOf(maxMk, 1), throttleMs = 300L, enabled = maxMk > 0, modifier = Modifier.fillMaxWidth())
         }
+        Labeled("Makeup kanan", ClipRules.fmtDb(mr)) {
+            SendSliderInt(mr, { spp.setClip(g, ml, it) }, 0..maxOf(maxMk, 1), throttleMs = 300L, enabled = maxMk > 0, modifier = Modifier.fillMaxWidth())
+        }
+        Text(
+            "Makeup maksimum mengikuti gain (≤ gain + 30,0 dB).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
     }
 }
 

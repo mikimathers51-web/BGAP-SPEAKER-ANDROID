@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.tas5805m.ctrl.ui.components.GlassCard
@@ -170,6 +171,48 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         )
     }
 
+    // Setelah Stop: tampilkan laporan sesi dulu; user tekan Simpan / Bagikan / Tutup.
+    sessionReport?.let { (title, text) ->
+        AlertDialog(
+            onDismissRequest = { sessionReport = null },
+            title = { Text(title) },
+            text = {
+                Column {
+                    Text(
+                        "Laporan sesi ukur. Belum disimpan otomatis — tekan Simpan ke riwayat bila mau.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        modifier = Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.saveDiagReport(title, text)
+                    notice = "Laporan sesi disimpan ke riwayat."
+                    sessionReport = null
+                }) { Text("Simpan ke riwayat") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { shareText(text) }) { Text("Bagikan") }
+                    TextButton(onClick = {
+                        saveFile(text, System.currentTimeMillis())
+                        sessionReport = null
+                    }) { Text("Simpan file") }
+                    TextButton(onClick = { sessionReport = null }) { Text("Tutup") }
+                }
+            },
+        )
+    }
+
     val histCard: @Composable () -> Unit = {
         HistoryCard(
             history = history,
@@ -203,16 +246,32 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         return
     }
 
-    // Selama layar ini tampil: baca status tiap 2 dtk (fault, counter link, BT). `status` ikut membaca & menghapus fault di chip.
+    // Poll status saat layar tampil. Saat sesi ukur aktif & tidak pause: tiap 2 dtk.
+    // Saat pause/stop: tetap poll pelan agar fault chip masih terlihat, tapi tidak membebani.
+    val measuring = state.measureRunning && !state.measurePaused
     PollWhileStarted {
         while (true) {
-            delay(2000)
+            // Baca state terkini tiap putaran (jangan andalkan capture composition).
+            val fast = spp.state.value.measureRunning && !spp.state.value.measurePaused
+            delay(if (fast) 2000L else 5000L)
             spp.requestStatus()
         }
     }
 
     val findings = remember(state) { Diagnosis.diagnose(state) }
     var cmd by remember { mutableStateOf("") }
+    // Laporan sesi setelah Stop — ditampilkan dulu; user tekan Simpan bila mau.
+    var sessionReport by remember { mutableStateOf<Pair<String, String>?>(null) } // title to text
+    var tick by remember { mutableStateOf(0) }
+    // Refresh label timer tiap 1 dtk saat measuring.
+    LaunchedEffect(state.measureRunning, state.measurePaused) {
+        while (state.measureRunning && !state.measurePaused) {
+            delay(1000)
+            tick++
+        }
+    }
+    @Suppress("UNUSED_VARIABLE")
+    val timerTick = tick // paksa recompose untuk label durasi
 
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -268,21 +327,69 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             GlassCard(contentPadding = 0.dp) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     CardTitle("Diagnosa")
-                    val win = if (state.baselineAtMs > 0) (System.currentTimeMillis() - state.baselineAtMs) / 1000 else -1L
+                    val elapsedSec = state.measureElapsedSec()
+                    val statusLabel = when {
+                        state.measureRunning && state.measurePaused ->
+                            "Dijeda · %02d:%02d (counter sejak Start)".format(elapsedSec / 60, elapsedSec % 60)
+                        state.measureRunning ->
+                            "Mengukur · %02d:%02d (counter dihitung sejak Start)".format(elapsedSec / 60, elapsedSec % 60)
+                        state.baselineAtMs > 0L ->
+                            "Berhenti · %02d:%02d — tekan Simpan bila mau simpan laporan sesi".format(elapsedSec / 60, elapsedSec % 60)
+                        else -> "Jendela ukur: belum dimulai — tekan Start"
+                    }
                     Text(
-                        if (win >= 0) "Jendela ukur: $win dtk (counter dihitung sejak Reset ukur)" else "Jendela ukur: belum dimulai",
+                        statusLabel,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        color = when {
+                            state.measureRunning && !state.measurePaused -> ColOk
+                            state.measurePaused -> ColWarn
+                            else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        },
                     )
+                    // Start / Pause / Stop
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        when {
+                            !state.measureRunning -> {
+                                Button(onClick = {
+                                    vm.startMeasure(resetFirmware = false)
+                                    notice = "Ukur dimulai (baseline saja). Counter firmware tidak di-reset."
+                                }) { Text("▶ Start") }
+                                OutlinedButton(onClick = {
+                                    vm.startMeasure(resetFirmware = true)
+                                    notice = "Ukur dimulai + reset counter firmware (wsub_diag_reset)."
+                                }) { Text("▶ Start + reset") }
+                            }
+                            state.measurePaused -> {
+                                Button(onClick = {
+                                    vm.resumeMeasure()
+                                    notice = "Ukur dilanjutkan."
+                                }) { Text("▶ Lanjut") }
+                                OutlinedButton(onClick = {
+                                    val sec = state.measureElapsedSec()
+                                    val text = Diagnosis.report(state, findings)
+                                    vm.stopMeasure()
+                                    sessionReport = "Sesi ukur %02d:%02d".format(sec / 60, sec % 60) to text
+                                    notice = "Ukur dihentikan. Laporan ditampilkan — tekan Simpan bila mau."
+                                }) { Text("⏹ Stop") }
+                            }
+                            else -> {
+                                OutlinedButton(onClick = {
+                                    vm.pauseMeasure()
+                                    notice = "Ukur dijeda."
+                                }) { Text("⏸ Pause") }
+                                OutlinedButton(onClick = {
+                                    val sec = state.measureElapsedSec()
+                                    val text = Diagnosis.report(state, findings)
+                                    vm.stopMeasure()
+                                    sessionReport = "Sesi ukur %02d:%02d".format(sec / 60, sec % 60) to text
+                                    notice = "Ukur dihentikan. Laporan ditampilkan — tekan Simpan bila mau."
+                                }) { Text("⏹ Stop") }
+                            }
+                        }
+                    }
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Button(onClick = { vm.refreshAll() }) { Text("Refresh semua") }
                         OutlinedButton(onClick = { spp.requestFault() }) { Text("Baca fault") }
-                        // Reset ukur: simpan dulu laporan "sebelum" agar bisa dibandingkan dengan laporan sesudahnya.
-                        OutlinedButton(onClick = {
-                            vm.saveDiagReport("Sebelum reset ukur", Diagnosis.report(state, findings))
-                            notice = "Laporan 'sebelum' disimpan ke riwayat; ukur dimulai ulang."
-                            vm.resetDiagnostics()
-                        }) { Text("Reset ukur") }
                         OutlinedButton(onClick = {
                             vm.saveDiagReport("Laporan manual", Diagnosis.report(state, findings))
                             notice = "Laporan disimpan ke riwayat."
@@ -324,10 +431,59 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
             }
         }
 
+        // Log khusus sesi ukur (hanya sejak Start) — lebih bersih untuk diagnosa error.
+        item(key = "sessionLog") {
+            GlassCard(contentPadding = 0.dp) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CardTitle("Log sesi ukur")
+                    val sessHint = when {
+                        state.measureRunning && state.measurePaused ->
+                            "Sesi dijeda — log tetap menerima ERR/fault. ${state.sessionLines.size} baris."
+                        state.measureRunning ->
+                            "Mengumpulkan log sejak Start (${state.sessionLines.size} baris). Baris poll (LVL/WSUB/…) disembunyikan."
+                        state.sessionLines.isNotEmpty() ->
+                            "Sesi berhenti — ${state.sessionLines.size} baris tersimpan sampai Start berikutnya."
+                        else -> "Tekan Start untuk mulai buffer log sesi (kosong tiap Start)."
+                    }
+                    Text(
+                        sessHint,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                    HorizontalDivider()
+                    if (state.sessionLines.isEmpty()) {
+                        Text("Belum ada log sesi.", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        state.sessionLines.take(80).forEach { line ->
+                            Text(
+                                line,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp,
+                                color = when {
+                                    line.startsWith("ERR") -> ColErr
+                                    line.startsWith("FAULT") -> ColErr
+                                    line.startsWith(">") -> ColInfo
+                                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                                },
+                            )
+                        }
+                        if (state.sessionLines.size > 80) {
+                            Text(
+                                "… +${state.sessionLines.size - 80} baris lebih lama (lihat laporan lengkap)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         item(key = "terminal") {
             GlassCard(contentPadding = 0.dp) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CardTitle("Terminal")
+                    CardTitle("Terminal (log global)")
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = cmd,
@@ -348,7 +504,7 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
                             .forEach { c -> AssistChip(onClick = { spp.sendRaw(c) }, label = { Text(c) }) }
                     }
                     Text(
-                        "> = perintah terkirim. Baris poll (LVL, WSUB, WSUBS, …) tidak ditampilkan di sini; lihat kartu di atas atau laporan.",
+                        "> = perintah terkirim. Baris poll (LVL, WSUB, WSUBS, …) tidak ditampilkan. Untuk diagnosa sesi, pakai kartu Log sesi ukur di atas.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                     )
@@ -660,7 +816,7 @@ private fun HistoryCard(
             }
             if (history.isEmpty()) {
                 Text(
-                    "Belum ada. Tekan \"Simpan ke riwayat\" atau \"Reset ukur\" (otomatis menyimpan laporan sebelum reset) untuk membandingkan sebelum/sesudah tuning.",
+                    "Belum ada. Tekan Start → Pause/Stop, lalu Simpan dari dialog laporan sesi; atau \"Simpan ke riwayat\" manual.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 )
@@ -689,6 +845,6 @@ private fun HistoryCard(
 private fun RowScope.InfoCell(label: String, value: String, color: Color) {
     Column(Modifier.weight(1f)) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = color, maxLines = 1)
+        Text(value, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

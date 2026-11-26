@@ -38,6 +38,7 @@ import com.tas5805m.ctrl.ui.theme.WarnAmber
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tas5805m.ctrl.data.AmpState
+import com.tas5805m.ctrl.ui.components.NotReady
 import com.tas5805m.ctrl.data.AppViewModel
 import com.tas5805m.ctrl.data.EqSync
 import kotlinx.coroutines.launch
@@ -72,10 +73,8 @@ fun EqScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
         else -> state.eqLeft
     }
 
-    if (!state.connected) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Hubungkan perangkat dulu", color = Color.Gray)
-        }
+    if (!state.ready) {
+        NotReady(state, modifier)
         return
     }
 

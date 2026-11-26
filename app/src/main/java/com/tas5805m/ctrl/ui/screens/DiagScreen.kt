@@ -121,6 +121,8 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
     var notice by remember { mutableStateOf("") }
     var viewing by remember { mutableStateOf<DiagReport?>(null) }
     var pendingText by remember { mutableStateOf<String?>(null) }
+    // Laporan sesi setelah Stop — ditampilkan dulu; user tekan Simpan bila mau.
+    var sessionReport by remember { mutableStateOf<Pair<String, String>?>(null) } // title to text
 
     // Simpan ke file lewat dialog pilih lokasi Android (tanpa izin storage tambahan).
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -260,8 +262,6 @@ fun DiagScreen(vm: AppViewModel, modifier: Modifier = Modifier) {
 
     val findings = remember(state) { Diagnosis.diagnose(state) }
     var cmd by remember { mutableStateOf("") }
-    // Laporan sesi setelah Stop — ditampilkan dulu; user tekan Simpan bila mau.
-    var sessionReport by remember { mutableStateOf<Pair<String, String>?>(null) } // title to text
     var tick by remember { mutableStateOf(0) }
     // Refresh label timer tiap 1 dtk saat measuring.
     LaunchedEffect(state.measureRunning, state.measurePaused) {

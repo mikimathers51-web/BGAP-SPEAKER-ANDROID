@@ -130,6 +130,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun savePreset(name: String) {
         val s = state.value
+        if (!s.ready) return   // sebelum sinkron semua angka masih nilai bawaan
         val clip = listOf("gain", "ml", "mr").map { s.tagInt("CLIP", it) }
         val p = Preset(
             name = name.ifBlank { "Preset ${System.currentTimeMillis() % 10000}" },
@@ -140,11 +141,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             ll = s.ll, lr = s.lr, rl = s.rl, rr = s.rr,
             eqLeft = s.eqLeft, eqRight = s.eqRight,
             created = java.time.Instant.now().toString(),
-            clip = if (clip.all { it != null }) clip.map { it ?: 0 } else null,
+            // Clipper nonaktif (default chip) tampil 0/0/0; menyimpannya lalu menerapkan preset justru MENGAKTIFKAN clipper.
+            clip = if (clip.all { it != null } && (s.clipEnabled ?: clip.any { it != 0 })) clip.map { it ?: 0 } else null,
             subInv = if (s.hasSubInv) s.subInv else null,
             standby = if (s.hasStandby) s.standbyMin else null,
             trim = if (s.hasWsub) s.wsubTrim else null,
             voice = if (s.hasWsub && s.hasVoice) s.voice else null,
+            peq = if (s.hasWsub && s.hasPeq) s.peq else null,
             eqCtr = if (s.mode == 3 && s.hasEqc) s.eqCtr else null,
             eqSub = if (s.mode == 3 && s.hasEqc) s.eqSub else null,
         )
@@ -165,12 +168,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Simpan EQ + voicing sub saat ini sebagai preset "scene" (tanpa mode/xover/volume). */
     fun saveScene(name: String) {
         val s = state.value
+        if (!s.ready) return
         val p = Preset(
             name = name.ifBlank { "Scene ${System.currentTimeMillis() % 10000}" },
             kind = "scene",
             eqOn = s.eqOn, eqLeft = s.eqLeft, eqRight = s.eqRight,
             created = java.time.Instant.now().toString(),
             voice = if (s.hasWsub && s.hasVoice) s.voice else null,
+            peq = if (s.hasWsub && s.hasPeq) s.peq else null,
         )
         viewModelScope.launch { presetRepo.add(p) }
     }
@@ -202,6 +207,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun resetDiagnostics() {
         viewModelScope.launch { spp.resetDiagnostics() }
     }
+
+    /** Mulai jendela ukur (baseline saja, atau + reset counter firmware). */
+    fun startMeasure(resetFirmware: Boolean = false) {
+        viewModelScope.launch { spp.startMeasure(resetFirmware) }
+    }
+
+    fun pauseMeasure() = spp.pauseMeasure()
+
+    fun resumeMeasure() = spp.resumeMeasure()
+
+    /** Stop ukur; laporan tidak auto-save — UI yang menampilkan lalu user tekan Simpan. */
+    fun stopMeasure() = spp.stopMeasure()
 
     /** Muat ulang semua status (caps, dump, status, fault, info) — dipakai tombol Refresh di Diagnosa. */
     fun refreshAll() {

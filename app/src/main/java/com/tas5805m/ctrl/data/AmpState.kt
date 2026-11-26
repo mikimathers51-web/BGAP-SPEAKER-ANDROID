@@ -2,6 +2,10 @@ package com.tas5805m.ctrl.data
 
 data class AmpState(
     val connected: Boolean = false,
+    /** true setelah firmware membalas `dump` pertama (data asli sudah masuk). Sebelumnya semua angka hanyalah nilai bawaan. */
+    val synced: Boolean = false,
+    /** Sinkronisasi tidak selesai dalam batas waktu (mis. firmware lama tanpa `dump`): sebagian nilai mungkin masih bawaan. */
+    val syncPartial: Boolean = false,
     val deviceName: String = "",
     val deviceAddress: String = "",
 
@@ -102,6 +106,10 @@ data class AmpState(
     val voice: VoiceParams = VoiceParams(),
     val voiceKnown: Boolean = false,
 
+    // PEQ sub wireless, 7 band di chip slave (WSUBE; firmware >= 2.9.27)
+    val peq: PeqParams = PeqParams(),
+    val peqKnown: Boolean = false,
+
     // Fault chip 2 (FAULT2, env 2-chip)
     val fault2Raw: String = "",
 
@@ -117,14 +125,37 @@ data class AmpState(
     val faultHistory: List<FaultEvent> = emptyList(),
     val baseline: Map<String, Long> = emptyMap(),             // counter saat "mulai ukur"
     val baselineAtMs: Long = 0L,
+    /** Sesi ukur diagnosa: Start / Pause / Stop. */
+    val measureRunning: Boolean = false,
+    val measurePaused: Boolean = false,
+    /** Waktu terakumulasi (ms) dari segmen yang sudah selesai (pause/stop). */
+    val measureAccumMs: Long = 0L,
+    /** Awal segmen berjalan saat ini; 0 bila tidak running atau sedang pause. */
+    val measureSegmentStartMs: Long = 0L,
     val lastRxMs: Long = 0L,
     val saved: Boolean? = null,
 
     val lastLines: List<String> = emptyList(),
+    /**
+     * Log khusus sesi ukur (Start→Stop). Hanya baris non-quiet sejak Start;
+     * dikosongkan tiap Start. Dipakai laporan sesi & kartu log di Diagnosa.
+     */
+    val sessionLines: List<String> = emptyList(),
     val lastError: String = "",
     /** Jumlah baris `ERR` sejak koneksi (naik terus; dipakai untuk mendeteksi perintah yang ditolak saat apply preset). */
     val errCount: Int = 0,
 ) {
+    /** Durasi jendela ukur aktif (tidak menghitung waktu pause), dalam ms. */
+    fun measureElapsedMs(nowMs: Long = System.currentTimeMillis()): Long {
+        if (baselineAtMs <= 0L && !measureRunning && measureAccumMs == 0L) return 0L
+        val live = if (measureRunning && !measurePaused && measureSegmentStartMs > 0L) {
+            (nowMs - measureSegmentStartMs).coerceAtLeast(0L)
+        } else 0L
+        return measureAccumMs + live
+    }
+
+    fun measureElapsedSec(nowMs: Long = System.currentTimeMillis()): Long =
+        measureElapsedMs(nowMs) / 1000L
     fun tag(t: String, k: String): String? = tags[t]?.get(k)
     fun tagInt(t: String, k: String): Int? = tags[t]?.get(k)?.toIntOrNull()
     /** HPF satelit dan LPF sub bisa diatur terpisah (`xover_hp` / `xover_lp`). */
@@ -146,6 +177,12 @@ data class AmpState(
     /** Mode 6: 1 chip mono 2-way — OUT_L = tweeter (HPF), OUT_R = woofer (LPF), `tway_hz`; selalu aktif. */
     val isMono2Way get() = mode == 6
     val hasClip get() = "clip" in caps
+    /** Terhubung DAN data pertama sudah diterima — dipakai UI sebagai syarat menampilkan/menyimpan nilai. */
+    val ready get() = connected && synced
+    /** Firmware mendukung `clipoff` (kembalikan clipper ke default chip). */
+    val hasClipOff get() = "clipoff" in caps
+    /** Dari `CLIP … en=0|1`; null di firmware lama (tidak ada field `en`). */
+    val clipEnabled: Boolean? get() = tag("CLIP", "en")?.let { it == "1" }
     val hasMod get() = "mod" in caps
     val hasDac get() = "dac" in caps
     val hasEqp get() = "eqp" in caps
@@ -167,6 +204,7 @@ data class AmpState(
     val hasEqc get() = "eqc" in caps
     val hasWlvl get() = "wlvl" in caps
     val hasVoice get() = "wvoice" in caps || "voice_basic" in caps || voiceKnown
+    val hasPeq get() = "wsub_peq" in caps || peqKnown
     val is21 get() = mode == 1 || mode == 2
     val is31 get() = mode == 3
     val isWireless get() = mode == 4
@@ -297,4 +335,6 @@ data class Preset(
     val voice: VoiceParams? = null,
     val eqCtr: List<Float>? = null,
     val eqSub: List<Float>? = null,
+    /** PEQ sub wireless (7 band, firmware master dengan CAPS `wsub_peq`); null = preset tidak menyentuh PEQ. */
+    val peq: PeqParams? = null,
 )

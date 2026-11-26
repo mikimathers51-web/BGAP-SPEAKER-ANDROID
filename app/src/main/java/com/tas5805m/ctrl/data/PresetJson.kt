@@ -42,6 +42,16 @@ object PresetJson {
                 put("pkQ10", v.pkQ10); put("harm", v.harm); put("limit", v.limit)
             })
         }
+        p.peq?.let { q ->
+            put("peq", JSONObject().apply {
+                put("on", q.on)
+                put("bands", JSONArray().apply {
+                    q.bands.forEach { b ->
+                        put(JSONObject().apply { put("t", b.type); put("hz", b.hz); put("g2", b.g2); put("q", b.q10) })
+                    }
+                })
+            })
+        }
     }
 
     fun fromJson(raw: String): List<Preset> = try {
@@ -77,6 +87,22 @@ object PresetJson {
                 limit = v.optInt("limit", 100),
             )
         }
+        val peq = o.optJSONObject("peq")?.let { q ->
+            val arr = q.optJSONArray("bands")
+            PeqParams(
+                on = q.optBoolean("on", false),
+                bands = List(PEQ_BANDS) { i ->
+                    val b = arr?.optJSONObject(i)
+                    if (b == null) PeqBand(hz = PEQ_DEFAULT_HZ[i])
+                    else PeqBand(
+                        type = b.optInt("t", PeqType.OFF),
+                        hz = b.optInt("hz", PEQ_DEFAULT_HZ[i]),
+                        g2 = b.optInt("g2", 0),
+                        q10 = b.optInt("q", 10),
+                    )
+                },
+            )
+        }
         return PresetTools.sanitize(Preset(
             id = o.optString("id").ifBlank { legacyId(o, index) },
             name = o.optString("name"),
@@ -105,6 +131,7 @@ object PresetJson {
             voice = voice,
             eqCtr = floats(o, "eqCtr"),
             eqSub = floats(o, "eqSub"),
+            peq = peq,
         ))
     }
 }

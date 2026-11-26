@@ -55,6 +55,7 @@ object PresetTools {
         voice = p.voice?.let { clampVoice(it) },
         eqCtr = p.eqCtr?.let { eq15(it) },
         eqSub = p.eqSub?.let { eq15(it) },
+        peq = p.peq?.sanitized(),
     )
 
     /** Band yang benar-benar dikirim untuk `mode` (mode ≠ 0 melewati band 0..2). */
@@ -81,6 +82,7 @@ object PresetTools {
         if (boost >= 4) parts += "Boost maks +$boost dB: bila terdengar pecah, turunkan Master ±$boost dB (EQ chip tanpa preamp)."
         val v = p.voice
         if (v != null && v.on && v.pkDb10 > 40) parts += "Peak sub +${v.pkDb10 / 10f} dB tanpa limiter: batasi ≤ +4 dB."
+        p.peq?.let { q -> PeqMath.headroomWarning(q, v)?.let { parts += it } }
         return if (parts.isEmpty()) null else parts.joinToString(" ")
     }
 

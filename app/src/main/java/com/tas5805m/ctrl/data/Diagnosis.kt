@@ -26,6 +26,8 @@ object Diagnosis {
     const val SLAVE_VOICE_PATCH = 19
     /** Slave ≥ 2.9.20: peaking bebas (Hz/Q/0,1 dB) via biquad; < 2.9.20: band 80/125 Hz, gain bulat, Q tetap. */
     const val SLAVE_FREE_PEAK_PATCH = 20
+    /** Slave ≥ 2.9.27: PEQ 7 band di chip (paket WSUB_T_PEQ); slave lebih lama mengabaikan paket itu. */
+    const val SLAVE_PEQ_PATCH = 27
     private const val DEFAULT_PKT = 64
     /** Jeda ≥ ini (ms) antar callback audio / antar kirim dianggap stall (histogram firmware: 40/60/80/100/200/500). */
     private const val STALL_TAP_MS = 100L
@@ -102,11 +104,18 @@ object Diagnosis {
         levels(s, out)
         if (s.hasWsub || s.isWireless) wireless(s, d, out)
         voice(s)?.let { out += Finding(Level.WARN, "Voicing sub", it) }
+        // PEQ hanya dilaporkan bila sedang dipakai (PEQ off + slave lama bukan masalah).
+        if (s.peq.on) peqWarning(s)?.let { out += Finding(Level.WARN, "PEQ sub", it) }
 
         if (out.none { it.level == Level.ERR || it.level == Level.WARN }) {
             val win = if (s.baselineAtMs > 0) {
-                val sec = ((System.currentTimeMillis() - s.baselineAtMs) / 1000).coerceAtLeast(0)
-                "Jendela ukur: $sec dtk."
+                val sec = s.measureElapsedSec()
+                val tag = when {
+                    s.measureRunning && s.measurePaused -> "dijeda"
+                    s.measureRunning -> "berjalan"
+                    else -> "selesai"
+                }
+                "Jendela ukur: $sec dtk ($tag)."
             } else ""
             out += Finding(Level.OK, "Tidak ada masalah terdeteksi", win)
         }
@@ -370,6 +379,24 @@ object Diagnosis {
     /** Peringatan khusus voicing (dipakai juga oleh kartu Voicing di tab Wireless). Null = tidak ada. */
     fun voiceWarning(s: AmpState): String? = voice(s)
 
+    /** Nomor sub (1-based) yang PASTI belum mendukung PEQ: firmware terbaca dan < 2.9.27. Versi tak diketahui tidak dihitung. */
+    fun peqUnsupported(s: AmpState): List<Int> = s.peerDetails.withIndex().mapNotNull { (i, p) ->
+        val patch = s.slaveDiag[p.mac.uppercase()]?.get("fw")?.substringAfterLast('.')?.toIntOrNull()
+        if (patch != null && patch < SLAVE_PEQ_PATCH) i + 1 else null
+    }
+
+    /** Peringatan untuk kartu PEQ: slave lama + risiko headroom. Null bila master tak punya PEQ atau tidak ada masalah. */
+    fun peqWarning(s: AmpState): String? {
+        if (!s.hasPeq) return null
+        val parts = ArrayList<String>()
+        val bad = peqUnsupported(s)
+        if (bad.isNotEmpty()) {
+            parts += "Sub ${bad.joinToString(", ") { "#$it" }} berfirmware < 2.9.$SLAVE_PEQ_PATCH: PEQ tidak diterapkan di slave itu (flash slave 2.9.$SLAVE_PEQ_PATCH)."
+        }
+        PeqMath.headroomWarning(s.peq, s.voice.takeIf { s.hasVoice })?.let { parts += it }
+        return if (parts.isEmpty()) null else parts.joinToString(" ")
+    }
+
     /** True bila SEMUA slave yang terpasang melapor firmware ≥ 2.9.20 (versi tak diketahui dianggap belum). */
     fun voiceFreePeak(s: AmpState): Boolean {
         if (s.peerDetails.isEmpty()) return false
@@ -407,8 +434,8 @@ object Diagnosis {
         sb.append("Firmware  : ").append(s.fwVersion.ifEmpty { "-" }).append(' ').append(s.fwRole).append('\n')
         sb.append("CAPS      : ").append(s.caps.joinToString(" ")).append('\n')
         sb.append("Jendela   : ").append(
-            if (s.baselineAtMs > 0) "counter dihitung sejak ukur, ${((System.currentTimeMillis() - s.baselineAtMs) / 1000).coerceAtLeast(0)} dtk lalu"
-            else "counter kumulatif sejak boot (belum 'Reset ukur')"
+            if (s.baselineAtMs > 0) "counter dihitung sejak Start, ${s.measureElapsedSec()} dtk aktif"
+            else "counter kumulatif sejak boot (belum Start ukur)"
         ).append('\n')
         sb.append("Ringkasan : ").append(
             Level.values().joinToString(" · ") { lv -> "${findings.count { it.level == lv }} ${lv.name}" }
@@ -438,7 +465,11 @@ object Diagnosis {
                     .append(e.flags.joinToString(",") { faultLabel(it) }).append('\n')
             }
         }
-        sb.append("\n== LOG (terbaru di bawah; balasan OK status/info dll disembunyikan, baris identik berurutan diringkas) ==\n")
+        if (s.sessionLines.isNotEmpty()) {
+            sb.append("\n== LOG SESI UKUR (hanya sejak Start; terbaru di bawah) ==\n")
+            compactLog(s.sessionLines.reversed()).takeLast(80).forEach { sb.append(it).append('\n') }
+        }
+        sb.append("\n== LOG GLOBAL (terbaru di bawah; balasan OK status/info dll disembunyikan, baris identik berurutan diringkas) ==\n")
         compactLog(s.lastLines.reversed()).takeLast(60).forEach { sb.append(it).append('\n') }
         return sb.toString()
     }

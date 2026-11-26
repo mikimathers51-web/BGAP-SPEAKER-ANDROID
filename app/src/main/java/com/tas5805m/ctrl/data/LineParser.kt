@@ -9,10 +9,12 @@ import java.util.Locale
  */
 object LineParser {
     const val LOG_MAX = 200
+    /** Batas buffer log sesi ukur (Start→Stop). */
+    const val SESSION_LOG_MAX = 300
 
     /** Baris yang di-poll terus (tidak masuk log; tetap diparse & disimpan di rawByHead). */
     val QUIET_HEADS = setOf(
-        "WLVL", "LVL", "LVL2", "WSUB", "WSUBS", "WSUBD", "WSUBT", "WSUBC", "WSUBV", "BTD", "BTEV",
+        "WLVL", "LVL", "LVL2", "WSUB", "WSUBS", "WSUBD", "WSUBT", "WSUBC", "WSUBV", "WSUBE", "BTD", "BTEV",
         "MODE", "STATE", "FX", "VER", "TWAY", "SUBLOUD", "PBASS",
     )
 
@@ -24,6 +26,10 @@ object LineParser {
         var ns = s.copy(lastRxMs = nowMs, rawByHead = s.rawByHead + (head to line))
         if (head !in QUIET_HEADS) {
             ns = ns.copy(lastLines = (listOf(line) + ns.lastLines).take(LOG_MAX))
+            // Buffer sesi: hanya saat ukur aktif (termasuk pause — tetap catat ERR/fault yang datang).
+            if (s.measureRunning) {
+                ns = ns.copy(sessionLines = (listOf(line) + ns.sessionLines).take(SESSION_LOG_MAX))
+            }
         }
         when (head) {
             "MODE" -> ns = parseMode(ns, line)
@@ -48,6 +54,7 @@ object LineParser {
             "WSUB" -> ns = parseWsub(ns, line).let { it.copy(tags = it.tags + ("WSUB" to kvOf(line))) }
             "WSUBS" -> ns = parseWsubSlot(ns, line)
             "WSUBV" -> ns = parseVoice(ns, line)
+            "WSUBE" -> ns = parsePeq(ns, line)
             "WLVL" -> ns = parseWlvl(ns, line)
             "WSUBD" -> ns = parseWsubDiag(ns, line)
             "WSUBT", "WSUBC", "BTD", "INFO", "CLIP", "MOD", "DAC", "DAC2", "EQP2" ->
@@ -63,6 +70,7 @@ object LineParser {
             "ERR" -> ns = ns.copy(lastError = line, errCount = ns.errCount + 1)
             "OK" -> {
                 val what = line.removePrefix("OK").trim()
+                if (what == "dump") ns = ns.copy(synced = true, syncPartial = false)
                 if (what !in SYNC_OK && ns.lastError.isNotEmpty()) ns = ns.copy(lastError = "")
             }
         }
@@ -248,6 +256,33 @@ object LineParser {
             limit = kv["lim"]?.toIntOrNull() ?: o.limit,
         )
         return s.copy(voice = v, voiceKnown = true)
+    }
+
+    /**
+     * `WSUBE on=1 n=7 b0=1:60:8:10 b1=0:0:0:0 …` (type:hz:g2:q10). Band off yang belum pernah diatur dikirim `0:0:0:0`:
+     * pertahankan nilai lokal (frekuensi/gain/Q) supaya setelan yang diingat UI tidak hilang.
+     */
+    private fun parsePeq(s: AmpState, line: String): AmpState {
+        val kv = kvOf(line)
+        val o = s.peq
+        val bands = List(PEQ_BANDS) { i ->
+            val old = o.bands.getOrNull(i) ?: PeqBand(hz = PEQ_DEFAULT_HZ[i])
+            val p = kv["b$i"]?.split(':')?.map { it.toIntOrNull() }
+            if (p == null || p.size != 4 || p.any { it == null }) old
+            else {
+                val (t, hz, g2, q10) = p.map { it!! }
+                val type = if (t in PeqType.OFF..PeqType.HSHELF) t else PeqType.OFF
+                val blank = type == PeqType.OFF && hz == 0
+                PeqBand(
+                    type = type,
+                    hz = if (hz in PEQ_HZ_MIN..PEQ_HZ_MAX) hz else old.hz,
+                    g2 = if (blank) old.g2 else g2.coerceIn(PEQ_G2_MIN, PEQ_G2_MAX),
+                    q10 = if (q10 in PEQ_Q_MIN..PEQ_Q_MAX) q10 else old.q10,
+                )
+            }
+        }
+        val on = kv["on"]?.let { it == "1" } ?: o.on
+        return s.copy(peq = PeqParams(on = on, bands = bands), peqKnown = true)
     }
 
     /** `WLVL s0=-250 s1=na` -> level per slot (na = offline / slave lama / basi). */

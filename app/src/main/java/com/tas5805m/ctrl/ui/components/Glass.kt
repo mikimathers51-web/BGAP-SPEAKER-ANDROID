@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,12 +102,16 @@ fun CardTitle(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
+        // Judul yang mengalah: bila judul + badge tidak muat, judul turun ke baris ke-2 (maks 2), badge tetap utuh.
         Text(
             text.uppercase(),
+            modifier = Modifier.weight(1f, fill = false).padding(end = if (trailing != null) 8.dp else 0.dp),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.6.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
         if (trailing != null) trailing()
     }
@@ -130,6 +135,7 @@ fun GlassBadge(
         fontSize = 10.sp,
         color = color,
         maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
     )
 }
 

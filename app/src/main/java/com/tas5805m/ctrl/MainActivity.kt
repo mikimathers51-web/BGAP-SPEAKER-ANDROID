@@ -69,6 +69,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.activity.SystemBarStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -146,9 +147,9 @@ class MainActivity : ComponentActivity() {
                                 add(Triple("Kontrol", Icons.Default.Tune, TAB_HOME))
                                 add(Triple("EQ", Icons.Default.Equalizer, TAB_EQ))
                                 add(Triple("DSP", Icons.Default.GraphicEq, TAB_DSP))
-                                if (showWireless) add(Triple("Wireless", Icons.Default.SettingsRemote, TAB_WIRELESS))
+                                if (showWireless) add(Triple("WSub", Icons.Default.SettingsRemote, TAB_WIRELESS))
                                 add(Triple("Monitor", Icons.Default.Speed, TAB_MONITOR))
-                                add(Triple("Diagnosa", Icons.Default.MonitorHeart, TAB_DIAG))
+                                add(Triple("Diag", Icons.Default.MonitorHeart, TAB_DIAG))
                             }
                             items.forEach { (label, icon, idx) ->
                                 NavigationBarItem(
@@ -318,6 +319,7 @@ private fun StatusTopBar(connected: Boolean, deviceName: String, reconnecting: I
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

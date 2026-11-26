@@ -1,5 +1,14 @@
 # Changelog
 
+## Belum dirilis
+- **PEQ sub wireless (7 band)**: kartu baru di tab Wireless — EQ parametrik (peaking / low shelf / high shelf, 20–250 Hz, gain −12…+9 dB langkah 0,5 dB, Q 0,5–10) yang dijalankan di DSP chip slave. Global untuk semua sub. Butuh master dengan CAPS `wsub_peq` dan slave ≥ 2.9.27 (perintah `wsub_peq`, `wsub_peq_band`, `wsub_peq_reset`; status `WSUBE`). Kartu menampilkan kurva respons, peringatan headroom (boost gabungan PEQ + peaking voicing ≥ +6 dB) dan peringatan bila ada slave < 2.9.27. Preset penuh dan Scene ikut menyimpan/menerapkan PEQ (field `peq` opsional, preset lama tetap terbaca).
+- **Clipper — tombol Matikan & status**: kartu *Clipper chip* menampilkan Aktif/Nonaktif dan tombol **Matikan** (perintah baru `clipoff`, CAPS `clipoff`) yang mengembalikan register ke default chip. Sebelumnya `0/0/0` bisa berarti "mati" atau "aktif dengan makeup 0" dan tidak bisa dibedakan. Firmware kini mengirim `CLIP … en=0|1`.
+- **Clipper — label & satuan**: "Batas kiri/kanan" diganti **Makeup kiri/kanan** dan tampil dalam dB (mis. `+3.0 dB`), sama seperti Gain.
+- **Clipper — rentang makeup**: makeup dibatasi `≤ gain + 30,0 dB` (batas register Q2.30 ≈ +6 dB) di slider, `SppClient.setClip` dan firmware, sehingga slider tidak melompat balik setelah readback.
+- **Perbaikan simpan/restore**: firmware hanya menyimpan clipper ke NVS bila aktif, dan preset tidak lagi menyimpan clipper yang sedang nonaktif. Sebelumnya `save`/preset saat clipper mati menyimpan `0/0/0`, yang saat boot/penerapan justru mengaktifkan clipper.
+- Uji unit baru: `ClipRulesTest`.
+- **Tidak ada lagi nilai bawaan yang tampil seperti data asli**: `AmpState` punya nilai awal (master 80, gain 18, EQ datar, dst.) yang sebelumnya tampil begitu tersambung, sebelum perangkat membalas. Kini ada `synced` (aktif setelah `OK dump`); Home, DSP, EQ, Wireless, dan Monitor menampilkan "Menyinkronkan dengan perangkat…" sampai data asli masuk, dan simpan Preset/Scene dikunci selama itu. Bila `dump` tidak dibalas dalam ±2 dtk (firmware lama), UI dibuka dengan peringatan *Sinkronisasi tidak lengkap* (`syncPartial`). Uji unit baru: `SyncStateTest`.
+
 ## 3.19.0
 - **EQ — Sync L→R**: tombol baru di toolbar EQ (muncul saat mode *L / R* terpisah, bukan di target CTR/SUB) yang menyalin gain kiri ke kanan lewat `eqband r`. Hanya band yang berbeda yang dikirim; band 0–2 dilewati bila crossover mengunci EQ (firmware menolak `eqband` untuk band tersebut); gain dibulatkan integer −15..15. Setelah selesai EQ dibaca ulang (`eqdump`) dan muncul ringkasan "N band disalin". Tombol *Sync* lama berganti nama **Muat ulang** (fungsinya tetap `eqdump`). Toolbar EQ kini bisa digulir horizontal.
 - **Monitor — pilihan meter tersimpan**: gaya meter (Classic / Segmented / Minimal) dan mode PEAK/AVG disimpan di DataStore (`meter_style`, `meter_rms`) sehingga bertahan setelah app ditutup. Sebelumnya gaya hanya variabel global di memori dan mode selalu kembali ke PEAK.
